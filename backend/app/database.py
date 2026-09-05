@@ -27,6 +27,7 @@ def get_db() -> Generator[Session, None, None]:
 
 
 def update_db_schema() -> None:
+    Base.metadata.create_all(bind=engine)
     inspector = inspect(engine)
     if "projects" in inspector.get_table_names():
         columns = [col['name'] for col in inspector.get_columns('projects')]
@@ -82,4 +83,4 @@ def update_db_schema() -> None:
             if "resolution_comment" not in columns:
                 conn.execute(text("ALTER TABLE findings ADD COLUMN resolution_comment TEXT"))
             if "resolved_at" not in columns:
-                conn.execute(text("ALTER TABLE findings ADD COLUMN resolved_at DATETIME"))
+                conn.execute(text("ALTER TABLE findings ADD COLUMN resolved_at DATETIME"))

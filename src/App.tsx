@@ -13,9 +13,11 @@ import FindingsList from './pages/Findings/FindingsList';
 import FindingDetail from './pages/Findings/FindingDetail';
 import Copilot from './pages/Copilot';
 import RiskMap from './pages/RiskMap';
+import ApiSecurityDashboard from './pages/ApiSecurity/ApiSecurityDashboard';
 import Reports from './pages/Reports';
 import Settings from './pages/Settings';
 import UIKit from './pages/UIKit';
+
 
 const App: React.FC = () => {
   return (
@@ -34,12 +36,14 @@ const App: React.FC = () => {
             <Route path="scans" element={<ScanCenter />} />
             <Route path="findings" element={<FindingsList />} />
             <Route path="findings/:id" element={<FindingDetail />} />
+            <Route path="api-security" element={<ApiSecurityDashboard />} />
             <Route path="copilot" element={<Copilot />} />
             <Route path="risk-map" element={<RiskMap />} />
             <Route path="reports" element={<Reports />} />
             <Route path="settings" element={<Settings />} />
             <Route path="ui-kit" element={<UIKit />} />
           </Route>
+
 
           {/* Fallback Catch-all Route */}
           <Route path="*" element={<Navigate to="/dashboard" replace />} />

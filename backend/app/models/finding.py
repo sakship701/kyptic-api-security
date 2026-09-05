@@ -29,6 +29,7 @@ class FindingSource(str, PythonEnum):
     MANUAL = "manual"
     SECRETS = "secrets"
     SCA = "sca"
+    API_SECURITY = "api_security"
 
 
 class Finding(Base):
