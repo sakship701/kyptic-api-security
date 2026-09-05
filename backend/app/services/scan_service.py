@@ -19,7 +19,10 @@ from app.services.finding_normalizer import (
     normalize_sca_results,
     normalize_dast_results,
 )
-from app.services.storage_service import get_source_dir
+from app.services.storage_service import get_source_dir, get_project_dir
+from app.services.api_security_scanner import run_static_api_analysis
+from app.services.dast_probes import run_active_dast_probes
+from app.services.ssrf_protection import is_ssrf_safe_url
 
 PHASES = (
     (20, "Running SAST"),
@@ -45,14 +48,14 @@ async def _run_scan(scan_id: int) -> None:
         scan = db.get(Scan, scan_id)
         if scan is None or scan.status in {ScanStatus.PAUSED, ScanStatus.STOPPED, ScanStatus.FAILED}:
             return
-        
+
         project = db.get(Project, scan.project_id)
         if project is None:
             scan.status = ScanStatus.FAILED
             scan.error_message = "Project not found"
             db.commit()
             return
-            
+
         if not project.source_type or project.source_status != "READY":
             scan.status = ScanStatus.FAILED
             scan.error_message = "Project source code is missing or not ready. Please complete onboarding first."
@@ -114,7 +117,77 @@ async def _run_scan(scan_id: int) -> None:
             scanner_ver_str = f"dast-web {dast_version}"
 
         # =====================================================================
-        # ROUTE 2: Source Code Projects (ZIP/GIT) -> SAST + Secrets + SCA
+        # ROUTE 2: OPENAPI Projects -> Static API Security Analysis + Optional DAST
+        # =====================================================================
+        elif project.source_type == "OPENAPI":
+            project_dir = get_project_dir(project.id)
+            spec_file = project_dir / "openapi_spec.raw"
+            if not spec_file.exists():
+                scan.status = ScanStatus.FAILED
+                scan.error_message = "OpenAPI specification source file not found for this project."
+                db.commit()
+                return
+
+            scan.current_phase = "Parsing OpenAPI Specification & Static Audit"
+            scan.progress = 30
+            db.commit()
+
+            try:
+                created_endpoints, static_findings = run_static_api_analysis(
+                    db=db, project_id=project.id, scan_id=scan_id
+                )
+            except ValueError as val_err:
+                scan.status = ScanStatus.FAILED
+                scan.error_message = str(val_err)
+                db.commit()
+                return
+            except Exception as static_err:
+                scan.status = ScanStatus.FAILED
+                scan.error_message = f"API security static analysis failed: {str(static_err)}"
+                db.commit()
+                return
+
+            combined_findings = list(static_findings)
+            scanner_name_str = "api-security"
+            scanner_ver_str = "api-security 1.0.0"
+
+            if project.api_dast_enabled and project.api_target_url:
+                target_url = project.api_target_url
+                is_safe, ssrf_msg = is_ssrf_safe_url(target_url, allow_localhost=False)
+                if is_safe:
+                    scan.current_phase = "Running Dynamic DAST Probes"
+                    scan.progress = 60
+                    scan.dast_status = "RUNNING"
+                    db.commit()
+
+                    existing_map = {f.fingerprint: f for f in combined_findings if f.fingerprint}
+
+                    def dast_progress_cb(done_cnt, total_cnt):
+                        scan.progress = 60 + int((done_cnt / total_cnt) * 30)
+                        db.commit()
+
+                    try:
+                        dast_findings = run_active_dast_probes(
+                            db=db,
+                            project=project,
+                            scan_id=scan_id,
+                            endpoints=created_endpoints,
+                            existing_findings_map=existing_map,
+                            progress_callback=dast_progress_cb,
+                        )
+                        combined_findings.extend(dast_findings)
+                        scan.dast_status = "COMPLETED"
+                        scanner_name_str = "api-security, dast-active-probe"
+                        scanner_ver_str = "api-security 1.0.0, dast-active-probe 1.0.0"
+                    except Exception as dast_err:
+                        scan.dast_status = "FAILED"
+                else:
+                    scan.dast_status = "SKIPPED_SSRF_BLOCKED"
+            elif project.api_dast_enabled and not project.api_target_url:
+                scan.dast_status = "SKIPPED_NO_TARGET"
+
+        # =====================================================================
+        # ROUTE 3: Source Code Projects (ZIP/GIT) -> SAST + Secrets + SCA
         # =====================================================================
         else:
             # Check if semgrep is installed
@@ -249,7 +322,7 @@ async def _run_scan(scan_id: int) -> None:
         scan.scanner_version = scanner_ver_str
         scan.duration = duration
         scan.result_count = len(unique_findings)
-        
+
         db.commit()
 
     except asyncio.CancelledError:

@@ -1,7 +1,12 @@
 import re
 from typing import Any, Dict, List, Set, Tuple
+from sqlalchemy import delete
+from sqlalchemy.orm import Session
+from app.models.api_endpoint import ApiEndpoint
 from app.models.finding import Finding, FindingSeverity, FindingSource, FindingStatus
+from app.services.api_spec_parser import OpenApiSpecParser
 from app.services.finding_normalizer import generate_fingerprint
+from app.services.storage_service import get_project_dir
 
 SENSITIVE_PATH_PATTERNS = [
     r"/admin", r"/users?", r"/accounts?", r"/profiles?", r"/payments?",
@@ -670,3 +675,39 @@ class ApiSecurityScanner:
             scanner_version="api-security 1.0.0",
             fingerprint=fingerprint
         )
+
+
+def run_static_api_analysis(
+    db: Session,
+    project_id: int,
+    scan_id: int,
+) -> Tuple[List[ApiEndpoint], List[Finding]]:
+    """
+    Executes static OpenAPI spec parsing, endpoint risk analysis, and finding generation.
+    Returns (created_api_endpoints, static_findings).
+    """
+    project_dir = get_project_dir(project_id)
+    spec_file = project_dir / "openapi_spec.raw"
+    if not spec_file.exists():
+        raise FileNotFoundError("OpenAPI specification source file not found for this project.")
+
+    parser = OpenApiSpecParser(spec_file.read_bytes())
+    endpoints_data = parser.extract_endpoints()
+    if not endpoints_data:
+        raise ValueError("Specification contains no valid paths or operations.")
+
+    scanner = ApiSecurityScanner(project_id=project_id, scan_id=scan_id)
+    all_findings: List[Finding] = []
+
+    # Clear previous endpoint inventory for this project
+    db.execute(delete(ApiEndpoint).where(ApiEndpoint.project_id == project_id))
+
+    created_endpoints: List[ApiEndpoint] = []
+    for ep_info in endpoints_data:
+        ep_dict, ep_findings = scanner.analyze_endpoint(ep_info)
+        endpoint_obj = ApiEndpoint(**ep_dict)
+        db.add(endpoint_obj)
+        created_endpoints.append(endpoint_obj)
+        all_findings.extend(ep_findings)
+
+    return created_endpoints, all_findings

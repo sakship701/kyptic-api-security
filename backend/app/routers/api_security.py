@@ -19,11 +19,11 @@ from app.schemas.api_security import (
     DastTestConnectionResponse,
 )
 from app.services.api_spec_parser import OpenApiSpecParser, MAX_SPEC_SIZE
-from app.services.api_security_scanner import ApiSecurityScanner
+from app.services.api_security_scanner import ApiSecurityScanner, run_static_api_analysis
 from app.services.storage_service import get_project_dir
 from app.services.ssrf_protection import is_ssrf_safe_url
 from app.services.dast_http_client import DastHttpClient, DastAuthContext, redact_secrets, DastError
-from app.services.dast_probes import DastProbeEngine, DastVerificationStatus, map_probe_result_to_finding
+from app.services.dast_probes import DastProbeEngine, DastVerificationStatus, map_probe_result_to_finding, run_active_dast_probes
 
 router = APIRouter(prefix="/api", tags=["api-security"])
 
@@ -285,29 +285,18 @@ def run_api_security_analysis(
     db.refresh(scan)
 
     try:
-        parser = OpenApiSpecParser(spec_file.read_bytes())
-        endpoints_data = parser.extract_endpoints()
+        created_endpoints, static_findings = run_static_api_analysis(
+            db=db, project_id=project_id, scan_id=scan.id
+        )
 
         scan.progress = 50
         scan.current_phase = "Auditing API Endpoints & Risk Rules"
         db.commit()
 
-        scanner = ApiSecurityScanner(project_id=project_id, scan_id=scan.id)
-        all_findings: List[Finding] = []
-        
-        # Clear existing endpoints and update with fresh scan analysis
-        db.execute(delete(ApiEndpoint).where(ApiEndpoint.project_id == project_id))
-
-        for ep_info in endpoints_data:
-            ep_dict, ep_findings = scanner.analyze_endpoint(ep_info)
-            endpoint_obj = ApiEndpoint(**ep_dict)
-            db.add(endpoint_obj)
-            all_findings.extend(ep_findings)
-
         # Deduplicate findings by fingerprint
         unique_findings: List[Finding] = []
         seen_fps = set()
-        for f in all_findings:
+        for f in static_findings:
             if f.fingerprint not in seen_fps:
                 seen_fps.add(f.fingerprint)
                 unique_findings.append(f)
@@ -317,7 +306,7 @@ def run_api_security_analysis(
             select(Finding).where(Finding.project_id == project_id, Finding.scan_id != scan.id)
         ).all()
         prev_triage_map = {
-            pf.fingerprint: pf for pf in prior_findings 
+            pf.fingerprint: pf for pf in prior_findings
             if pf.fingerprint and pf.status in (FindingStatus.RESOLVED, FindingStatus.FALSE_POSITIVE)
         }
 
@@ -434,70 +423,18 @@ def run_dast_active_scan(
     start_time = time.time()
 
     try:
-        client = DastHttpClient(allow_localhost=False)
-        auth_ctx = DastAuthContext(
-            auth_type=project.api_auth_type or "NONE",
-            header_name=project.api_auth_header_name or "Authorization",
-        )
-        probe_engine = DastProbeEngine(client=client, base_url=target_url, auth_context=auth_ctx)
-
-        # Existing findings for deduplication & triage preservation
-        existing_findings_list = list(db.scalars(select(Finding).where(Finding.project_id == project_id)).all())
-        existing_findings_map = {f.fingerprint: f for f in existing_findings_list if f.fingerprint}
-
-        new_findings: list[Finding] = []
-        total_ep_count = len(endpoints)
-
-        for idx, ep in enumerate(endpoints):
-            # Probe resilience (Phase 3A): handle endpoint probe errors cleanly without aborting scan
-            probe_results = []
-            try:
-                probe_results = [
-                    probe_engine.probe_auth_enforcement(ep),
-                    probe_engine.probe_bola(ep),
-                    probe_engine.probe_mass_assignment(ep),
-                    probe_engine.probe_rate_limiting(ep),
-                ]
-            except Exception as ep_err:
-                probe_results = [
-                    DastProbeResult(
-                        endpoint_id=ep.id,
-                        probe_type=DastProbeType.AUTH_ENFORCEMENT,
-                        status=DastVerificationStatus.INCONCLUSIVE,
-                        evidence=f"Endpoint probing interrupted: {redact_secrets(str(ep_err))}",
-                    )
-                ]
-
-            # Endpoint-level DAST Status (Phase 3B)
-            has_vuln = any(pr.status == DastVerificationStatus.VERIFIED_VULNERABLE for pr in probe_results)
-            has_inconclusive = any(pr.status == DastVerificationStatus.INCONCLUSIVE for pr in probe_results)
-            has_secure = any(pr.status == DastVerificationStatus.VERIFIED_SECURE for pr in probe_results)
-
-            if has_vuln:
-                ep.dast_status = "VERIFIED_VULNERABLE"
-            elif has_inconclusive:
-                ep.dast_status = "INCONCLUSIVE"
-            elif has_secure:
-                ep.dast_status = "VERIFIED_SECURE"
-            else:
-                ep.dast_status = "UNTESTED"
-
-            ep.updated_at = datetime.utcnow()
-
-            for pr in probe_results:
-                if pr.status == DastVerificationStatus.VERIFIED_VULNERABLE:
-                    finding = map_probe_result_to_finding(
-                        project_id=project_id,
-                        scan_id=scan.id,
-                        endpoint=ep,
-                        probe_result=pr,
-                        existing_findings_map=existing_findings_map,
-                    )
-                    if finding:
-                        new_findings.append(finding)
-
-            scan.progress = int(((idx + 1) / total_ep_count) * 100)
+        def update_progress(idx, total):
+            scan.progress = int((idx / total) * 100)
             db.commit()
+
+        new_findings = run_active_dast_probes(
+            db=db,
+            project=project,
+            scan_id=scan.id,
+            endpoints=endpoints,
+            existing_findings_map=existing_findings_map,
+            progress_callback=update_progress,
+        )
 
         if new_findings:
             db.add_all(new_findings)

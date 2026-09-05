@@ -4,6 +4,10 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.models.project import Project
+from datetime import datetime
+from app.models.scan import Scan, ScanStatus
+from app.schemas.scan import ScanResponse
+from app.services.scan_service import start_scan_task
 from app.schemas.project import (
     ProjectCreate,
     ProjectResponse,
@@ -168,3 +172,29 @@ def get_project_source(project_id: int, db: Session = Depends(get_db)) -> dict:
         "last_ingested_at": project.last_ingested_at,
         "error_message": project.ingestion_error,
     }
+
+
+@router.post("/{project_id}/scans", response_model=ScanResponse, status_code=status.HTTP_201_CREATED)
+async def create_project_scan(project_id: int, db: Session = Depends(get_db)) -> Scan:
+    project = db.get(Project, project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    if not project.source_type or project.source_status != "READY":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Project target or source code is not ready for scanning. Please complete onboarding first."
+        )
+
+    scan = Scan(
+        project_id=project_id,
+        status=ScanStatus.RUNNING,
+        progress=0,
+        current_phase="Preparing source",
+        started_at=datetime.utcnow(),
+    )
+    db.add(scan)
+    db.commit()
+    db.refresh(scan)
+    start_scan_task(scan.id)
+    return scan

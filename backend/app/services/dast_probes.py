@@ -1,10 +1,14 @@
 import json
 import re
+from datetime import datetime
 from enum import Enum
 from typing import Any, Dict, List, Optional, Tuple
+from sqlalchemy import select
+from sqlalchemy.orm import Session
 
 from app.models.api_endpoint import ApiEndpoint
 from app.models.finding import Finding, FindingSeverity, FindingSource, FindingStatus
+from app.models.project import Project
 from app.services.dast_http_client import (
     DastAuthContext,
     DastHttpClient,
@@ -13,6 +17,7 @@ from app.services.dast_http_client import (
     sanitize_headers,
 )
 from app.services.finding_normalizer import generate_fingerprint
+from app.services.ssrf_protection import is_ssrf_safe_url
 
 
 class DastVerificationStatus(str, Enum):
@@ -124,7 +129,7 @@ class DastProbeEngine:
     def probe_auth_enforcement(self, endpoint: ApiEndpoint) -> DastProbeResult:
         # Check if endpoint appears to require authentication according to OpenAPI spec / static scan
         is_protected_static = endpoint.auth_status in ("AUTHENTICATED", "PROTECTED", "REQUIRED")
-        
+
         # Test 1: Send request WITHOUT authentication
         unauth_url = self._build_full_url(endpoint.path)
         # Substitute sample path variables if any exist
@@ -654,3 +659,86 @@ def map_probe_result_to_finding(
         resolution_comment=resolution_comment,
         resolved_at=resolved_at,
     )
+
+
+def run_active_dast_probes(
+    db: Session,
+    project: Project,
+    scan_id: int,
+    endpoints: List[ApiEndpoint],
+    existing_findings_map: Optional[Dict[str, Finding]] = None,
+    progress_callback: Optional[Any] = None,
+) -> List[Finding]:
+    """
+    Executes active DAST probes against project endpoints using safety controls.
+    Updates endpoint dast_status in place and returns new DAST findings.
+    """
+    target_url = project.api_target_url
+    if not target_url or not project.api_dast_enabled:
+        return []
+
+    client = DastHttpClient(allow_localhost=False)
+    auth_ctx = DastAuthContext(
+        auth_type=project.api_auth_type or "NONE",
+        header_name=project.api_auth_header_name or "Authorization",
+    )
+    probe_engine = DastProbeEngine(client=client, base_url=target_url, auth_context=auth_ctx)
+
+    if existing_findings_map is None:
+        existing_findings_list = list(db.scalars(select(Finding).where(Finding.project_id == project.id)).all())
+        existing_findings_map = {f.fingerprint: f for f in existing_findings_list if f.fingerprint}
+
+    new_findings: List[Finding] = []
+    total_ep_count = len(endpoints)
+
+    for idx, ep in enumerate(endpoints):
+        probe_results = []
+        try:
+            probe_results = [
+                probe_engine.probe_auth_enforcement(ep),
+                probe_engine.probe_bola(ep),
+                probe_engine.probe_mass_assignment(ep),
+                probe_engine.probe_rate_limiting(ep),
+            ]
+        except Exception as ep_err:
+            probe_results = [
+                DastProbeResult(
+                    endpoint_id=ep.id,
+                    probe_type=DastProbeType.AUTH_ENFORCEMENT,
+                    status=DastVerificationStatus.INCONCLUSIVE,
+                    evidence=f"Endpoint probing interrupted: {redact_secrets(str(ep_err))}",
+                )
+            ]
+
+        has_vuln = any(pr.status == DastVerificationStatus.VERIFIED_VULNERABLE for pr in probe_results)
+        has_inconclusive = any(pr.status == DastVerificationStatus.INCONCLUSIVE for pr in probe_results)
+        has_secure = any(pr.status == DastVerificationStatus.VERIFIED_SECURE for pr in probe_results)
+
+        if has_vuln:
+            ep.dast_status = "VERIFIED_VULNERABLE"
+        elif has_inconclusive:
+            ep.dast_status = "INCONCLUSIVE"
+        elif has_secure:
+            ep.dast_status = "VERIFIED_SECURE"
+        else:
+            ep.dast_status = "UNTESTED"
+
+        ep.updated_at = datetime.utcnow()
+
+        for pr in probe_results:
+            if pr.status == DastVerificationStatus.VERIFIED_VULNERABLE:
+                finding = map_probe_result_to_finding(
+                    project_id=project.id,
+                    scan_id=scan_id,
+                    endpoint=ep,
+                    probe_result=pr,
+                    existing_findings_map=existing_findings_map,
+                )
+                if finding:
+                    new_findings.append(finding)
+
+        if progress_callback:
+            progress_callback(idx + 1, total_ep_count)
+        db.commit()
+
+    return new_findings
