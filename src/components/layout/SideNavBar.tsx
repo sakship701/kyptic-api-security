@@ -9,12 +9,14 @@ export const SideNavBar: React.FC = () => {
   const navItems = [
     { name: 'Dashboard', path: '/dashboard', icon: 'dashboard' },
     { name: 'Projects', path: '/projects', icon: 'inventory_2' },
+    { name: 'API Security', path: '/api-security', icon: 'api' },
     { name: 'New Scan', path: '/scans', icon: 'rocket_launch' },
     { name: 'Risk Map', path: '/risk-map', icon: 'hub' },
     { name: 'Vulnerabilities', path: '/findings', icon: 'security' },
     { name: 'AI Security Copilot', path: '/copilot', icon: 'psychology' },
     { name: 'Reports', path: '/reports', icon: 'assessment' },
   ];
+
 
   return (
     <nav className="hidden md:flex flex-col h-screen sticky left-0 top-0 w-64 border-r border-outline-variant bg-surface-container-low py-stack-lg z-40 shrink-0">

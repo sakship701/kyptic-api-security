@@ -128,11 +128,12 @@ class TestProjectIngestion(unittest.TestCase):
     def test_router_ingest_website(self):
         from app.routers.projects import ingest_website
         from app.schemas.project import WebsiteIngestRequest
-        payload = WebsiteIngestRequest(target_url="https://kyptic.io")
+        payload = WebsiteIngestRequest(target_url="http://127.0.0.1:8000")
         project = ingest_website(self.project.id, payload, self.db)
         self.assertEqual(project.source_type, "WEBSITE")
         self.assertEqual(project.source_status, "READY")
-        self.assertEqual(project.target_url, "https://kyptic.io")
+        self.assertEqual(project.target_url, "http://127.0.0.1:8000")
+
 
     def test_router_get_source_not_found(self):
         from app.routers.projects import get_project_source
