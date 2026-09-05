@@ -10,6 +10,8 @@ export interface ApiEndpointData {
   rate_limit_status: string;
   request_validation_status: string;
   sensitive_data_fields: string | null;
+  bola_status?: string | null;
+  mass_assignment_status?: string | null;
   risk_score: number;
   risk_level: string;
   discovered_via: string;
@@ -27,6 +29,9 @@ export interface ApiSecuritySummaryData {
   unauthenticated_endpoints: number;
   sensitive_data_endpoints: number;
   unconstrained_validation_endpoints: number;
+  bola_risk_endpoints?: number;
+  mass_assignment_endpoints?: number;
+  missing_rate_limit_endpoints?: number;
   total_api_findings: number;
   open_api_findings: number;
 }

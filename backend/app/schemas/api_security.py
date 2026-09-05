@@ -16,6 +16,8 @@ class ApiEndpointResponse(BaseModel):
     rate_limit_status: str
     request_validation_status: str
     sensitive_data_fields: str | None = None
+    bola_status: str = "NONE"
+    mass_assignment_status: str = "NONE"
     risk_score: int
     risk_level: str
     discovered_via: str
@@ -33,6 +35,9 @@ class ApiSecuritySummaryResponse(BaseModel):
     unauthenticated_endpoints: int
     sensitive_data_endpoints: int
     unconstrained_validation_endpoints: int
+    bola_risk_endpoints: int = 0
+    mass_assignment_endpoints: int = 0
+    missing_rate_limit_endpoints: int = 0
     total_api_findings: int
     open_api_findings: int
 

@@ -228,6 +228,360 @@ paths:
         self.assertEqual(summary["sensitive_data_endpoints"], 1)
         self.assertGreaterEqual(summary["total_api_findings"], 1)
 
+    # -------------------------------------------------------------------------
+    # Milestone 2 Tests: BOLA / Broken Object Level Authorization (OWASP API1:2023)
+    # -------------------------------------------------------------------------
+    def test_bola_detection_users_id(self):
+        spec = """{
+            "openapi": "3.0.0",
+            "paths": {
+                "/users/{id}": {
+                    "get": {
+                        "summary": "Get User Profile",
+                        "parameters": [{"name": "id", "in": "path", "required": true, "schema": {"type": "string"}}],
+                        "responses": {"200": {"description": "OK"}}
+                    }
+                }
+            }
+        }"""
+        self.client.post(
+            f"/api/projects/{self.project.id}/ingest/openapi",
+            files={"file": ("openapi.json", io.BytesIO(spec.encode("utf-8")), "application/json")}
+        )
+        self.client.post(f"/api/projects/{self.project.id}/api-security/analyze")
+
+        ep_res = self.client.get(f"/api/projects/{self.project.id}/api-security/endpoints")
+        ep_data = ep_res.json()
+        self.assertEqual(len(ep_data), 1)
+        self.assertEqual(ep_data[0]["path"], "/users/{id}")
+        self.assertEqual(ep_data[0]["bola_status"], "POTENTIAL_BOLA")
+
+    def test_bola_detection_orders_order_id(self):
+        spec = """{
+            "openapi": "3.0.0",
+            "paths": {
+                "/orders/{order_id}": {
+                    "get": {
+                        "summary": "Get Order Details",
+                        "responses": {"200": {"description": "OK"}}
+                    }
+                }
+            }
+        }"""
+        self.client.post(
+            f"/api/projects/{self.project.id}/ingest/openapi",
+            files={"file": ("openapi.json", io.BytesIO(spec.encode("utf-8")), "application/json")}
+        )
+        self.client.post(f"/api/projects/{self.project.id}/api-security/analyze")
+
+        ep_res = self.client.get(f"/api/projects/{self.project.id}/api-security/endpoints")
+        ep_data = ep_res.json()
+        self.assertEqual(ep_data[0]["bola_status"], "POTENTIAL_BOLA")
+
+    def test_bola_non_object_param(self):
+        spec = """{
+            "openapi": "3.0.0",
+            "paths": {
+                "/search": {
+                    "get": {
+                        "summary": "Search items",
+                        "parameters": [{"name": "query", "in": "query", "schema": {"type": "string"}}],
+                        "responses": {"200": {"description": "OK"}}
+                    }
+                }
+            }
+        }"""
+        self.client.post(
+            f"/api/projects/{self.project.id}/ingest/openapi",
+            files={"file": ("openapi.json", io.BytesIO(spec.encode("utf-8")), "application/json")}
+        )
+        self.client.post(f"/api/projects/{self.project.id}/api-security/analyze")
+
+        ep_res = self.client.get(f"/api/projects/{self.project.id}/api-security/endpoints")
+        ep_data = ep_res.json()
+        self.assertEqual(ep_data[0]["bola_status"], "NONE")
+
+    def test_bola_owasp_mapping(self):
+        from app.services.api_security_scanner import ApiSecurityScanner
+        ep_info = {
+            "path": "/documents/{document_id}",
+            "method": "GET",
+            "summary": "Fetch document",
+            "parameters": [{"name": "document_id", "in": "path"}],
+            "response_schemas": {"200": {}}
+        }
+        scanner = ApiSecurityScanner(project_id=self.project.id, scan_id=1)
+        _, findings = scanner.analyze_endpoint(ep_info)
+        bola_findings = [f for f in findings if "BOLA" in f.title or "API1" in f.owasp]
+        self.assertGreaterEqual(len(bola_findings), 1)
+        self.assertEqual(bola_findings[0].owasp, "API1:2023 Broken Object Level Authorization")
+
+    def test_bola_deterministic_finding_generation(self):
+        from app.services.api_security_scanner import ApiSecurityScanner
+        ep_info = {
+            "path": "/accounts/{accountId}",
+            "method": "GET",
+            "summary": "Fetch Account",
+            "parameters": [{"name": "accountId", "in": "path"}],
+            "response_schemas": {"200": {}}
+        }
+        scanner1 = ApiSecurityScanner(project_id=self.project.id, scan_id=1)
+        _, findings1 = scanner1.analyze_endpoint(ep_info)
+
+        scanner2 = ApiSecurityScanner(project_id=self.project.id, scan_id=2)
+        _, findings2 = scanner2.analyze_endpoint(ep_info)
+
+        fp1 = [f.fingerprint for f in findings1 if "API-BOLA" in f.rule_id]
+        fp2 = [f.fingerprint for f in findings2 if "API-BOLA" in f.rule_id]
+        self.assertEqual(fp1, fp2)
+
+    def test_bola_duplicate_prevention(self):
+        spec = """{
+            "openapi": "3.0.0",
+            "paths": {
+                "/profiles/{profileId}": {
+                    "get": {
+                        "summary": "Get Profile",
+                        "responses": {"200": {"description": "OK"}}
+                    }
+                }
+            }
+        }"""
+        self.client.post(
+            f"/api/projects/{self.project.id}/ingest/openapi",
+            files={"file": ("openapi.json", io.BytesIO(spec.encode("utf-8")), "application/json")}
+        )
+        res1 = self.client.post(f"/api/projects/{self.project.id}/api-security/analyze")
+        scan1_id = res1.json()["id"]
+
+        res2 = self.client.post(f"/api/projects/{self.project.id}/api-security/analyze")
+        scan2_id = res2.json()["id"]
+
+        findings_scan1 = self.db.query(Finding).filter(Finding.project_id == self.project.id, Finding.scan_id == scan1_id).all()
+        bola_fps_scan1 = [f.fingerprint for f in findings_scan1 if f.rule_id == "API-BOLA-POTENTIAL-EXPOSURE"]
+
+        findings_scan2 = self.db.query(Finding).filter(Finding.project_id == self.project.id, Finding.scan_id == scan2_id).all()
+        bola_fps_scan2 = [f.fingerprint for f in findings_scan2 if f.rule_id == "API-BOLA-POTENTIAL-EXPOSURE"]
+
+        self.assertEqual(len(bola_fps_scan2), 1)
+        self.assertEqual(bola_fps_scan1, bola_fps_scan2)
+
+    # -------------------------------------------------------------------------
+    # Milestone 2 Tests: Mass Assignment / Unsafe Property Binding (OWASP API6:2023)
+    # -------------------------------------------------------------------------
+    def test_mass_assignment_is_admin(self):
+        spec = """{
+            "openapi": "3.0.0",
+            "paths": {
+                "/users": {
+                    "post": {
+                        "summary": "Create User",
+                        "requestBody": {
+                            "content": {
+                                "application/json": {
+                                    "schema": {
+                                        "type": "object",
+                                        "properties": {
+                                            "username": {"type": "string"},
+                                            "is_admin": {"type": "boolean"}
+                                        }
+                                    }
+                                }
+                            }
+                        },
+                        "responses": {"200": {"description": "OK"}}
+                    }
+                }
+            }
+        }"""
+        self.client.post(
+            f"/api/projects/{self.project.id}/ingest/openapi",
+            files={"file": ("openapi.json", io.BytesIO(spec.encode("utf-8")), "application/json")}
+        )
+        self.client.post(f"/api/projects/{self.project.id}/api-security/analyze")
+
+        ep_res = self.client.get(f"/api/projects/{self.project.id}/api-security/endpoints")
+        ep_data = ep_res.json()
+        self.assertEqual(ep_data[0]["mass_assignment_status"], "SUSPICIOUS_PROPERTIES_EXPOSED")
+
+    def test_mass_assignment_role_permissions(self):
+        spec = """{
+            "openapi": "3.0.0",
+            "paths": {
+                "/accounts/{id}": {
+                    "put": {
+                        "summary": "Update Account",
+                        "requestBody": {
+                            "content": {
+                                "application/json": {
+                                    "schema": {
+                                        "type": "object",
+                                        "properties": {
+                                            "role": {"type": "string"},
+                                            "permissions": {"type": "array", "items": {"type": "string"}}
+                                        }
+                                    }
+                                }
+                            }
+                        },
+                        "responses": {"200": {"description": "OK"}}
+                    }
+                }
+            }
+        }"""
+        self.client.post(
+            f"/api/projects/{self.project.id}/ingest/openapi",
+            files={"file": ("openapi.json", io.BytesIO(spec.encode("utf-8")), "application/json")}
+        )
+        self.client.post(f"/api/projects/{self.project.id}/api-security/analyze")
+
+        ep_res = self.client.get(f"/api/projects/{self.project.id}/api-security/endpoints")
+        ep_data = ep_res.json()
+        self.assertEqual(ep_data[0]["mass_assignment_status"], "SUSPICIOUS_PROPERTIES_EXPOSED")
+
+    def test_mass_assignment_ownership_on_post_put(self):
+        from app.services.api_security_scanner import ApiSecurityScanner
+        ep_info = {
+            "path": "/documents/{id}",
+            "method": "PATCH",
+            "summary": "Update document",
+            "request_body_schema": {
+                "type": "object",
+                "properties": {
+                    "title": {"type": "string"},
+                    "owner_id": {"type": "integer"}
+                }
+            },
+            "response_schemas": {"200": {}}
+        }
+        scanner = ApiSecurityScanner(project_id=self.project.id, scan_id=1)
+        _, findings = scanner.analyze_endpoint(ep_info)
+        ma_findings = [f for f in findings if "Mass Assignment" in f.title]
+        self.assertEqual(len(ma_findings), 1)
+
+    def test_mass_assignment_owasp_mapping(self):
+        from app.services.api_security_scanner import ApiSecurityScanner
+        ep_info = {
+            "path": "/users",
+            "method": "POST",
+            "summary": "Create User",
+            "request_body_schema": {
+                "type": "object",
+                "properties": {
+                    "balance": {"type": "number"}
+                }
+            },
+            "response_schemas": {"200": {}}
+        }
+        scanner = ApiSecurityScanner(project_id=self.project.id, scan_id=1)
+        _, findings = scanner.analyze_endpoint(ep_info)
+        ma_findings = [f for f in findings if "Mass Assignment" in f.title]
+        self.assertGreaterEqual(len(ma_findings), 1)
+        self.assertIn("API6:2023", ma_findings[0].owasp)
+
+    def test_mass_assignment_remediation(self):
+        from app.services.api_security_scanner import ApiSecurityScanner
+        ep_info = {
+            "path": "/users",
+            "method": "POST",
+            "summary": "Register",
+            "request_body_schema": {
+                "type": "object",
+                "properties": {
+                    "is_admin": {"type": "boolean"}
+                }
+            },
+            "response_schemas": {"200": {}}
+        }
+        scanner = ApiSecurityScanner(project_id=self.project.id, scan_id=1)
+        _, findings = scanner.analyze_endpoint(ep_info)
+        ma_findings = [f for f in findings if "Mass Assignment" in f.title]
+        self.assertIn("allowlist", ma_findings[0].description.lower() + ma_findings[0].code_snippet.lower())
+
+    # -------------------------------------------------------------------------
+    # Milestone 2 Tests: Rate Limiting & Resource Consumption (OWASP API4:2023)
+    # -------------------------------------------------------------------------
+    def test_rate_limit_explicit_metadata(self):
+        spec = """{
+            "openapi": "3.0.0",
+            "paths": {
+                "/api/data": {
+                    "x-rate-limit": "100 per minute",
+                    "get": {
+                        "summary": "Get data",
+                        "responses": {"200": {"description": "OK"}}
+                    }
+                }
+            }
+        }"""
+        self.client.post(
+            f"/api/projects/{self.project.id}/ingest/openapi",
+            files={"file": ("openapi.json", io.BytesIO(spec.encode("utf-8")), "application/json")}
+        )
+        self.client.post(f"/api/projects/{self.project.id}/api-security/analyze")
+
+        ep_res = self.client.get(f"/api/projects/{self.project.id}/api-security/endpoints")
+        ep_data = ep_res.json()
+        self.assertEqual(ep_data[0]["rate_limit_status"], "PRESENT")
+
+    def test_rate_limit_missing_metadata(self):
+        spec = """{
+            "openapi": "3.0.0",
+            "paths": {
+                "/api/status": {
+                    "get": {
+                        "summary": "Status check",
+                        "responses": {"200": {"description": "OK"}}
+                    }
+                }
+            }
+        }"""
+        self.client.post(
+            f"/api/projects/{self.project.id}/ingest/openapi",
+            files={"file": ("openapi.json", io.BytesIO(spec.encode("utf-8")), "application/json")}
+        )
+        self.client.post(f"/api/projects/{self.project.id}/api-security/analyze")
+
+        ep_res = self.client.get(f"/api/projects/{self.project.id}/api-security/endpoints")
+        ep_data = ep_res.json()
+        self.assertEqual(ep_data[0]["rate_limit_status"], "MISSING")
+
+    def test_rate_limit_resource_intensive_heuristic(self):
+        spec = """{
+            "openapi": "3.0.0",
+            "paths": {
+                "/reports/export": {
+                    "post": {
+                        "summary": "Generate Large Export Report",
+                        "responses": {"200": {"description": "OK"}}
+                    }
+                }
+            }
+        }"""
+        self.client.post(
+            f"/api/projects/{self.project.id}/ingest/openapi",
+            files={"file": ("openapi.json", io.BytesIO(spec.encode("utf-8")), "application/json")}
+        )
+        self.client.post(f"/api/projects/{self.project.id}/api-security/analyze")
+
+        summary_res = self.client.get(f"/api/projects/{self.project.id}/api-security/summary")
+        summary = summary_res.json()
+        self.assertGreaterEqual(summary["missing_rate_limit_endpoints"], 1)
+
+    def test_rate_limit_owasp_mapping(self):
+        from app.services.api_security_scanner import ApiSecurityScanner
+        ep_info = {
+            "path": "/files/upload",
+            "method": "POST",
+            "summary": "Upload file",
+            "response_schemas": {"200": {}}
+        }
+        scanner = ApiSecurityScanner(project_id=self.project.id, scan_id=1)
+        _, findings = scanner.analyze_endpoint(ep_info)
+        rl_findings = [f for f in findings if "Rate Limiting" in f.title]
+        self.assertEqual(len(rl_findings), 1)
+        self.assertEqual(rl_findings[0].owasp, "API4:2023 Unrestricted Resource Consumption")
+
 
 if __name__ == "__main__":
     unittest.main()

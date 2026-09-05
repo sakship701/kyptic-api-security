@@ -138,10 +138,10 @@ export const ApiSecurityDashboard: React.FC = () => {
             <div className="flex items-center gap-3 mb-2">
               <span className="material-symbols-outlined text-primary text-3xl">api</span>
               <h1 className="font-display-lg text-[32px] text-white">API Security Decision Dashboard</h1>
-              <Badge variant="primary">Milestone 1</Badge>
+              <Badge variant="primary">Milestone 1 & 2</Badge>
             </div>
             <p className="text-on-surface-variant text-body-md max-w-3xl">
-              Automated API endpoint discovery, OpenAPI specification analysis, authentication weakness detection, and excessive data exposure auditing.
+              Automated API endpoint discovery, OpenAPI specification analysis, BOLA heuristic detection (API1), authentication auditing (API2), data exposure checking (API3), rate limit verification (API4), mass assignment auditing (API6), and deterministic risk scoring.
             </p>
           </div>
 
@@ -330,7 +330,7 @@ export const ApiSecurityDashboard: React.FC = () => {
                   <th className="p-4 pl-6">Method</th>
                   <th className="p-4">Endpoint Path</th>
                   <th className="p-4">Auth Requirement</th>
-                  <th className="p-4">Input Validation</th>
+                  <th className="p-4">Security Signals (BOLA / Mass Assign)</th>
                   <th className="p-4">Sensitive Fields Exposed</th>
                   <th className="p-4">Risk Score</th>
                   <th className="p-4 pr-6 text-right">Actions</th>
@@ -356,32 +356,48 @@ export const ApiSecurityDashboard: React.FC = () => {
                       {ep.summary && <div className="text-xs text-on-surface-variant truncate max-w-xs">{ep.summary}</div>}
                     </td>
 
-                    {/* Auth Status */}
+                    {/* Auth & Throttling Status */}
                     <td className="p-4">
-                      {ep.auth_status === 'UNAUTHENTICATED' ? (
-                        <span className="inline-flex items-center gap-1.5 text-xs text-error font-medium bg-error/10 px-2.5 py-1 rounded-full border border-error/30">
-                          <span className="material-symbols-outlined text-xs">lock_open</span>
-                          Unauthenticated
-                        </span>
-                      ) : (
-                        <span className="inline-flex items-center gap-1.5 text-xs text-success font-medium bg-success/10 px-2.5 py-1 rounded-full border border-success/30">
-                          <span className="material-symbols-outlined text-xs">lock</span>
-                          {ep.auth_type || 'Authenticated'}
-                        </span>
-                      )}
+                      <div className="flex flex-col gap-1">
+                        {ep.auth_status === 'UNAUTHENTICATED' ? (
+                          <span className="inline-flex items-center gap-1 text-xs text-error font-medium bg-error/10 px-2 py-0.5 rounded border border-error/30 w-fit">
+                            <span className="material-symbols-outlined text-xs">lock_open</span>
+                            Unauthenticated
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1 text-xs text-success font-medium bg-success/10 px-2 py-0.5 rounded border border-success/30 w-fit">
+                            <span className="material-symbols-outlined text-xs">lock</span>
+                            {ep.auth_type || 'Authenticated'}
+                          </span>
+                        )}
+                        {ep.rate_limit_status === 'MISSING' && (
+                          <span className="text-[11px] text-on-surface-variant">Rate Limit: Missing</span>
+                        )}
+                      </div>
                     </td>
 
-                    {/* Input Validation */}
+                    {/* Security Signals (BOLA / Mass Assignment) */}
                     <td className="p-4">
-                      {ep.request_validation_status === 'UNCONSTRAINED' ? (
-                        <span className="text-xs text-warning bg-warning/10 px-2.5 py-1 rounded-full border border-warning/30">
-                          Unconstrained
-                        </span>
-                      ) : (
-                        <span className="text-xs text-on-surface-variant bg-surface-container px-2.5 py-1 rounded-full">
-                          Validated
-                        </span>
-                      )}
+                      <div className="flex flex-wrap gap-1">
+                        {ep.bola_status === 'POTENTIAL_BOLA' && (
+                          <span className="inline-flex items-center gap-1 text-xs text-warning bg-warning/10 px-2 py-0.5 rounded border border-warning/30 font-medium">
+                            BOLA Risk (API1)
+                          </span>
+                        )}
+                        {ep.mass_assignment_status === 'SUSPICIOUS_PROPERTIES_EXPOSED' && (
+                          <span className="inline-flex items-center gap-1 text-xs text-error bg-error/10 px-2 py-0.5 rounded border border-error/30 font-medium">
+                            Mass Assign (API6)
+                          </span>
+                        )}
+                        {ep.request_validation_status === 'UNCONSTRAINED' && ep.bola_status !== 'POTENTIAL_BOLA' && ep.mass_assignment_status !== 'SUSPICIOUS_PROPERTIES_EXPOSED' && (
+                          <span className="text-xs text-warning bg-warning/10 px-2 py-0.5 rounded border border-warning/30">
+                            Unconstrained Input
+                          </span>
+                        )}
+                        {ep.bola_status !== 'POTENTIAL_BOLA' && ep.mass_assignment_status !== 'SUSPICIOUS_PROPERTIES_EXPOSED' && ep.request_validation_status !== 'UNCONSTRAINED' && (
+                          <span className="text-xs text-outline font-mono">None Detected</span>
+                        )}
+                      </div>
                     </td>
 
                     {/* Sensitive Fields */}
@@ -543,10 +559,32 @@ export const ApiSecurityDashboard: React.FC = () => {
               </div>
 
               <div className="p-4 rounded-xl bg-surface-container-high/50 border border-outline-variant/50">
-                <div className="text-xs text-on-surface-variant font-semibold uppercase mb-1">Input Validation Boundary</div>
+                <div className="text-xs text-on-surface-variant font-semibold uppercase mb-1">Throttling & Rate Limit</div>
                 <div className="flex items-center gap-2">
-                  <span className="material-symbols-outlined text-sm text-warning">verified</span>
-                  <span className="text-white font-medium">{selectedEndpoint.request_validation_status}</span>
+                  <span className={`material-symbols-outlined text-sm ${selectedEndpoint.rate_limit_status === 'PRESENT' ? 'text-success' : 'text-warning'}`}>
+                    {selectedEndpoint.rate_limit_status === 'PRESENT' ? 'speed' : 'hourglass_empty'}
+                  </span>
+                  <span className="text-white font-medium">{selectedEndpoint.rate_limit_status}</span>
+                </div>
+              </div>
+
+              <div className="p-4 rounded-xl bg-surface-container-high/50 border border-outline-variant/50">
+                <div className="text-xs text-on-surface-variant font-semibold uppercase mb-1">BOLA Authorization Indicator (API1)</div>
+                <div className="flex items-center gap-2">
+                  <span className={`material-symbols-outlined text-sm ${selectedEndpoint.bola_status === 'POTENTIAL_BOLA' ? 'text-warning' : 'text-success'}`}>
+                    {selectedEndpoint.bola_status === 'POTENTIAL_BOLA' ? 'shield_lock' : 'verified_user'}
+                  </span>
+                  <span className="text-white font-medium">{selectedEndpoint.bola_status || 'NONE'}</span>
+                </div>
+              </div>
+
+              <div className="p-4 rounded-xl bg-surface-container-high/50 border border-outline-variant/50">
+                <div className="text-xs text-on-surface-variant font-semibold uppercase mb-1">Mass Assignment Status (API6)</div>
+                <div className="flex items-center gap-2">
+                  <span className={`material-symbols-outlined text-sm ${selectedEndpoint.mass_assignment_status === 'SUSPICIOUS_PROPERTIES_EXPOSED' ? 'text-error' : 'text-success'}`}>
+                    {selectedEndpoint.mass_assignment_status === 'SUSPICIOUS_PROPERTIES_EXPOSED' ? 'edit_attributes' : 'check_circle'}
+                  </span>
+                  <span className="text-white font-medium">{selectedEndpoint.mass_assignment_status || 'SAFE'}</span>
                 </div>
               </div>
 
@@ -566,11 +604,38 @@ export const ApiSecurityDashboard: React.FC = () => {
             <div className="flex flex-col gap-3">
               <h4 className="text-sm font-bold text-white uppercase tracking-wider">Security Recommendations</h4>
               <div className="p-4 rounded-xl bg-primary/5 border border-primary/20 text-sm text-on-surface space-y-2">
+                {selectedEndpoint.bola_status === 'POTENTIAL_BOLA' && (
+                  <div className="flex items-start gap-2">
+                    <span className="material-symbols-outlined text-warning text-base shrink-0 mt-0.5">shield_lock</span>
+                    <div>
+                      <strong className="text-white">OWASP API1:2023 - Potential BOLA Risk:</strong> Path contains object-level identifier parameter(s). Ensure backend enforces server-side authorization checking that the authenticated principal owns or is permitted to access the target object ID. Static specification analysis cannot confirm runtime authorization checks.
+                    </div>
+                  </div>
+                )}
+
+                {selectedEndpoint.mass_assignment_status === 'SUSPICIOUS_PROPERTIES_EXPOSED' && (
+                  <div className="flex items-start gap-2">
+                    <span className="material-symbols-outlined text-error text-base shrink-0 mt-0.5">edit_attributes</span>
+                    <div>
+                      <strong className="text-white">OWASP API6:2023 - Unsafe Property Binding:</strong> Request body schema defines privileged or internal properties (administrative roles, ownership, financial attributes). Enforce strict DTO allowlists in controller/router endpoints to prevent client mutation of internal state.
+                    </div>
+                  </div>
+                )}
+
+                {selectedEndpoint.rate_limit_status === 'MISSING' && (
+                  <div className="flex items-start gap-2">
+                    <span className="material-symbols-outlined text-info text-base shrink-0 mt-0.5">hourglass_empty</span>
+                    <div>
+                      <strong className="text-white">OWASP API4:2023 - Missing Rate Limiting Declarations:</strong> Specification does not declare explicit rate-limiting extensions (`x-rate-limit`). Verify server-side throttling or API gateway rate limits are applied to prevent Denial of Service and brute-force attacks.
+                    </div>
+                  </div>
+                )}
+
                 {selectedEndpoint.auth_status === 'UNAUTHENTICATED' && (
                   <div className="flex items-start gap-2">
                     <span className="material-symbols-outlined text-error text-base shrink-0 mt-0.5">priority_high</span>
                     <div>
-                      <strong className="text-white">Authentication Gap:</strong> Enforce OAuth 2.0 or Bearer JWT security scheme on this endpoint in your API gateway or framework router.
+                      <strong className="text-white">OWASP API2:2023 - Authentication Gap:</strong> Enforce OAuth 2.0 or Bearer JWT security scheme on this endpoint in your API gateway or framework router.
                     </div>
                   </div>
                 )}
@@ -579,7 +644,7 @@ export const ApiSecurityDashboard: React.FC = () => {
                   <div className="flex items-start gap-2">
                     <span className="material-symbols-outlined text-warning text-base shrink-0 mt-0.5">warning</span>
                     <div>
-                      <strong className="text-white">Data Exposure Mitigation:</strong> Mask or omit sensitive response fields (`{selectedEndpoint.sensitive_data_fields}`) from DTO response serializations.
+                      <strong className="text-white">OWASP API3:2023 - Data Exposure Mitigation:</strong> Mask or omit sensitive response fields (`{selectedEndpoint.sensitive_data_fields}`) from DTO response serializations.
                     </div>
                   </div>
                 )}

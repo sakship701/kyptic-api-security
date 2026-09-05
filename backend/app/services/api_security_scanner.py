@@ -20,6 +20,51 @@ PII_FINANCIAL_FIELDS = {
 
 SENSITIVE_RESPONSE_FIELDS = CREDENTIAL_FIELDS | PII_FINANCIAL_FIELDS
 
+OBJECT_IDENTIFIER_PATTERNS = [
+    r"^id$", r"^user_?id$", r"^account_?id$", r"^order_?id$", r"^document_?id$",
+    r"^profile_?id$", r"^customer_?id$", r"^resource_?id$", r"^uuid$", r"^guid$",
+    r".*_id$", r".*Id$"
+]
+
+SUSPICIOUS_MASS_ASSIGNMENT_FIELDS = {
+    "is_admin": "PRIVILEGE",
+    "isadmin": "PRIVILEGE",
+    "admin": "PRIVILEGE",
+    "role": "PRIVILEGE",
+    "roles": "PRIVILEGE",
+    "permissions": "PRIVILEGE",
+    "permission": "PRIVILEGE",
+    "privilege": "PRIVILEGE",
+    "privileges": "PRIVILEGE",
+    "user_type": "PRIVILEGE",
+    "usertype": "PRIVILEGE",
+    "account_status": "ACCOUNT_STATE",
+    "accountstatus": "ACCOUNT_STATE",
+    "status": "ACCOUNT_STATE",
+    "verified": "ACCOUNT_STATE",
+    "is_verified": "ACCOUNT_STATE",
+    "isverified": "ACCOUNT_STATE",
+    "balance": "FINANCIAL",
+    "credit_limit": "FINANCIAL",
+    "creditlimit": "FINANCIAL",
+    "owner_id": "OWNERSHIP",
+    "ownerid": "OWNERSHIP",
+    "created_by": "OWNERSHIP",
+    "createdby": "OWNERSHIP",
+    "internal": "SYSTEM",
+    "system": "SYSTEM"
+}
+
+RATE_LIMIT_EXTENSIONS = {
+    "x-rate-limit", "x-ratelimit", "x-rate-limit-limit", "x-rate-limit-requests",
+    "x-throttle", "x-throttling", "x-rate-limit-window", "x-rate-limit-reset"
+}
+
+RESOURCE_INTENSIVE_PATH_PATTERNS = [
+    r"/upload", r"/export", r"/bulk", r"/search", r"/report", r"/generate",
+    r"/compute", r"/import", r"/sync", r"/download", r"/batch"
+]
+
 
 def is_sensitive_path(path: str) -> bool:
     path_lower = path.lower()
@@ -59,6 +104,113 @@ def find_sensitive_fields_in_schema(schema: Any, field_path: str = "") -> List[T
     return found
 
 
+def find_object_identifiers(path: str, parameters: List[Dict[str, Any]]) -> List[str]:
+    """
+    Identifies path parameters or parameter definitions representing object identifiers for BOLA analysis.
+    """
+    found_ids: List[str] = []
+
+    # 1. Extract path parameters from URI string like /users/{id}
+    path_param_names = re.findall(r"\{([a-zA-Z0-9_]+)\}", path)
+    for p_name in path_param_names:
+        for pattern in OBJECT_IDENTIFIER_PATTERNS:
+            if re.match(pattern, p_name, re.IGNORECASE):
+                if p_name not in found_ids:
+                    found_ids.append(p_name)
+                break
+
+    # 2. Check parameter list definitions where in == "path"
+    for param in parameters:
+        if isinstance(param, dict) and param.get("in") == "path":
+            p_name = str(param.get("name", ""))
+            if p_name and p_name not in found_ids:
+                for pattern in OBJECT_IDENTIFIER_PATTERNS:
+                    if re.match(pattern, p_name, re.IGNORECASE):
+                        found_ids.append(p_name)
+                        break
+
+    return found_ids
+
+
+def find_suspicious_mass_assignment_fields(schema: Any, field_path: str = "") -> List[Tuple[str, str]]:
+    """
+    Recursively inspects request body schemas for privileged, ownership, or financial properties.
+    Returns list of (field_name, category) tuples.
+    """
+    found = []
+    if not isinstance(schema, dict):
+        return found
+
+    properties = schema.get("properties", {})
+    if isinstance(properties, dict):
+        for prop_name, prop_val in properties.items():
+            current_path = f"{field_path}.{prop_name}" if field_path else prop_name
+            prop_lower = prop_name.lower()
+
+            if prop_lower in SUSPICIOUS_MASS_ASSIGNMENT_FIELDS:
+                category = SUSPICIOUS_MASS_ASSIGNMENT_FIELDS[prop_lower]
+                # Avoid flagging generic "status" on non-privileged query DTOs
+                if prop_lower == "status" and len(properties) <= 2 and "id" in properties:
+                    pass
+                else:
+                    found.append((current_path, category))
+
+            # Recurse if nested object or items
+            if isinstance(prop_val, dict):
+                if prop_val.get("type") == "object" or "properties" in prop_val:
+                    found.extend(find_suspicious_mass_assignment_fields(prop_val, current_path))
+                elif prop_val.get("type") == "array" and "items" in prop_val:
+                    found.extend(find_suspicious_mass_assignment_fields(prop_val.get("items"), f"{current_path}[]"))
+
+    return found
+
+
+def check_has_rate_limit_declarations(op_dict: Dict[str, Any], path_item_dict: Dict[str, Any], root_spec_dict: Dict[str, Any]) -> bool:
+    """
+    Checks operation, path item, and root spec dictionaries for explicit rate-limiting vendor extensions.
+    """
+    dicts_to_check = [op_dict or {}, path_item_dict or {}, root_spec_dict or {}]
+    for d in dicts_to_check:
+        if not isinstance(d, dict):
+            continue
+        for key in d.keys():
+            key_lower = str(key).lower()
+            if key_lower in RATE_LIMIT_EXTENSIONS or any(ext in key_lower for ext in ("rate-limit", "ratelimit", "throttle")):
+                return True
+    return False
+
+
+def is_resource_intensive_operation(path: str, method: str, ep_data: Dict[str, Any]) -> bool:
+    """
+    Heuristic check to determine if an operation is resource-intensive.
+    """
+    path_lower = path.lower()
+    for pattern in RESOURCE_INTENSIVE_PATH_PATTERNS:
+        if re.search(pattern, path_lower):
+            return True
+
+    # Check request body media type for file uploads
+    op_dict = ep_data.get("op_dict", {})
+    if isinstance(op_dict, dict) and "requestBody" in op_dict:
+        rb = op_dict["requestBody"]
+        if isinstance(rb, dict) and "content" in rb:
+            content = rb["content"]
+            if isinstance(content, dict):
+                for m_type in content.keys():
+                    if "multipart/form-data" in m_type or "octet-stream" in m_type:
+                        return True
+
+    # Check parameter types
+    for param in ep_data.get("parameters", []):
+        if isinstance(param, dict):
+            p_name = str(param.get("name", "")).lower()
+            p_type = str(param.get("type", "")).lower()
+            if p_type == "file" or p_name in ("file", "attachment", "batch", "bulk"):
+                return True
+
+    return False
+
+
 class ApiSecurityScanner:
     def __init__(self, project_id: int, scan_id: int):
         self.project_id = project_id
@@ -73,6 +225,10 @@ class ApiSecurityScanner:
         parameters = ep_data.get("parameters", [])
         request_body_schema = ep_data.get("request_body_schema")
         response_schemas = ep_data.get("response_schemas", {})
+
+        op_dict = ep_data.get("op_dict", {})
+        path_item_dict = ep_data.get("path_item_dict", {})
+        root_spec_dict = ep_data.get("root_spec_dict", {})
 
         findings: List[Finding] = []
 
@@ -106,7 +262,6 @@ class ApiSecurityScanner:
         else:
             auth_type = "NONE"
 
-        # Check for authentication findings
         sensitive_route = is_sensitive_path(path)
 
         if explicitly_unauthenticated:
@@ -124,7 +279,7 @@ class ApiSecurityScanner:
                 f"Endpoint: {method} {path}\n"
                 f"Security Declaration: security: [] (Explicit Override)\n"
                 f"Sensitive Path Indicator: {sensitive_route}\n"
-                "Note: This is a static analysis indicator of a missing or potentially weak authentication control."
+                "Note: Static analysis indicator of missing authentication controls."
             )
             finding = self._create_finding(
                 rule_id=rule_id,
@@ -276,11 +431,117 @@ class ApiSecurityScanner:
             )
             findings.append(finding)
 
-        # Rate Limit declaration status (Milestone 1 Spec check)
-        rate_limit_status = "MISSING"
+        # ---------------------------------------------------------------------
+        # 4. Milestone 2: BOLA / Broken Object Level Authorization (OWASP API1:2023)
+        # ---------------------------------------------------------------------
+        object_ids = find_object_identifiers(path, parameters)
+        bola_status = "NONE"
+        if object_ids:
+            bola_status = "POTENTIAL_BOLA"
+            bola_sev = FindingSeverity.HIGH if (auth_status == "UNAUTHENTICATED" or sensitive_route) else FindingSeverity.MEDIUM
+            rule_id = "API-BOLA-POTENTIAL-EXPOSURE"
+            title = f"Potential Broken Object Level Authorization (BOLA): {method} {path}"
+            desc = (
+                f"The endpoint '{method} {path}' contains object-level identifier parameter(s) ({', '.join(object_ids)}). "
+                "Static specification analysis indicates authorization enforcement (whether the authenticated principal is permitted to access the specific object ID) cannot be verified from the OpenAPI definition alone. "
+                "Unenforced object-level authorization allows attackers to manipulate object IDs to access or modify unauthorized user data."
+            )
+            evidence = (
+                f"Endpoint: {method} {path}\n"
+                f"Detected Object Identifier(s): {', '.join(object_ids)}\n"
+                f"Authentication Status: {auth_status}\n"
+                f"Sensitive Path: {sensitive_route}\n"
+                "Note: Static analysis heuristic indicator requiring runtime verification of server-side object ownership checks."
+            )
+            finding = self._create_finding(
+                rule_id=rule_id,
+                title=title,
+                description=desc,
+                severity=bola_sev,
+                category="API Security - Authorization",
+                owasp="API1:2023 Broken Object Level Authorization",
+                file_path=path,
+                evidence=evidence,
+                remediation="Require server-side authorization checks ensuring the authenticated principal is permitted to access the referenced object. Do not rely only on object IDs being difficult to guess."
+            )
+            findings.append(finding)
 
         # ---------------------------------------------------------------------
-        # 4. Risk Score Calculation (0 - 100)
+        # 5. Milestone 2: Mass Assignment / Unsafe Property Binding (OWASP API6:2023)
+        # ---------------------------------------------------------------------
+        mass_assignment_status = "NONE"
+        if method.upper() in ("POST", "PUT", "PATCH") and request_body_schema:
+            suspicious_fields = find_suspicious_mass_assignment_fields(request_body_schema)
+            if suspicious_fields:
+                mass_assignment_status = "SUSPICIOUS_PROPERTIES_EXPOSED"
+                field_names = [f[0] for f in suspicious_fields]
+                has_privilege_or_ownership = any(f[1] in ("PRIVILEGE", "OWNERSHIP", "FINANCIAL") for f in suspicious_fields)
+                ma_sev = FindingSeverity.HIGH if has_privilege_or_ownership else FindingSeverity.MEDIUM
+                rule_id = "API-MASS-ASSIGNMENT-SUSPICIOUS-FIELD"
+                title = f"Potential Mass Assignment / Unsafe Property Binding: {method} {path}"
+                desc = (
+                    f"The request body schema for '{method} {path}' exposes privileged or system properties ({', '.join(field_names)}) that clients can supply in requests. "
+                    "If backend frameworks automatically bind request parameters directly to internal domain models or database records, attackers can manipulate administrative roles, ownership, or account states."
+                )
+                evidence = (
+                    f"Endpoint: {method} {path}\n"
+                    f"HTTP Method: {method}\n"
+                    f"Exposed Privileged/Internal Field(s): {', '.join(field_names)}\n"
+                    "Note: Static specification-based risk indicator. Verify backend DTO and field allowlist binding."
+                )
+                finding = self._create_finding(
+                    rule_id=rule_id,
+                    title=title,
+                    description=desc,
+                    severity=ma_sev,
+                    category="API Security - Data Binding",
+                    owasp="API6:2023 Unrestricted Access to Sensitive Business Flows",
+                    file_path=path,
+                    evidence=evidence,
+                    remediation="Use explicit allowlists/DTOs for writable fields and prevent clients from modifying server-controlled authorization, ownership, financial, or internal state fields."
+                )
+                findings.append(finding)
+            else:
+                mass_assignment_status = "SAFE"
+
+        # ---------------------------------------------------------------------
+        # 6. Milestone 2: Rate Limiting & Resource Consumption (OWASP API4:2023)
+        # ---------------------------------------------------------------------
+        has_rl_decl = check_has_rate_limit_declarations(op_dict, path_item_dict, root_spec_dict)
+        rate_limit_status = "PRESENT" if has_rl_decl else "MISSING"
+
+        is_resource_intensive = is_resource_intensive_operation(path, method, ep_data)
+        if rate_limit_status == "MISSING" and (is_resource_intensive or sensitive_route or auth_status == "UNAUTHENTICATED"):
+            rl_sev = FindingSeverity.MEDIUM if (is_resource_intensive or sensitive_route) else FindingSeverity.LOW
+            rule_id = "API-RATELIMIT-MISSING-THROTTLING"
+            title = f"Missing or Unclear Rate Limiting Controls: {method} {path}"
+            desc = (
+                f"The OpenAPI specification for '{method} {path}' does not declare explicit rate-limiting or throttling controls. "
+                f"{'This operation appears to perform resource-intensive processing (file processing, bulk data, search, or report generation). ' if is_resource_intensive else ''}"
+                "Unthrottled endpoints are vulnerable to Denial of Service (DoS), brute-force attacks, and resource exhaustion."
+            )
+            evidence = (
+                f"Endpoint: {method} {path}\n"
+                f"Rate Limit Extension Metadata: None declared\n"
+                f"Resource Intensive Indicator: {is_resource_intensive}\n"
+                f"Sensitive Path: {sensitive_route}\n"
+                "Note: Static analysis cannot prove the absence of runtime rate limiting; verify API gateway throttling configuration."
+            )
+            finding = self._create_finding(
+                rule_id=rule_id,
+                title=title,
+                description=desc,
+                severity=rl_sev,
+                category="API Security - Resource Management",
+                owasp="API4:2023 Unrestricted Resource Consumption",
+                file_path=path,
+                evidence=evidence,
+                remediation="Apply server-side throttling/rate limits, especially to authentication, expensive, bulk, search, upload, and resource-intensive endpoints."
+            )
+            findings.append(finding)
+
+        # ---------------------------------------------------------------------
+        # 7. Deterministic Risk Score Calculation (0 - 100)
         # ---------------------------------------------------------------------
         risk_score = 0
         score_reasons = []
@@ -310,6 +571,23 @@ class ApiSecurityScanner:
             risk_score += 10
             score_reasons.append("Unconstrained input parameters (+10)")
 
+        # Bounded Milestone 2 Risk Additions
+        if bola_status == "POTENTIAL_BOLA":
+            if auth_status == "UNAUTHENTICATED" or sensitive_route:
+                risk_score += 25
+                score_reasons.append("BOLA potential exposure on sensitive/unauthenticated route (+25)")
+            else:
+                risk_score += 15
+                score_reasons.append("BOLA potential exposure (+15)")
+
+        if mass_assignment_status == "SUSPICIOUS_PROPERTIES_EXPOSED":
+            risk_score += 20
+            score_reasons.append("Suspicious mass assignment fields exposed (+20)")
+
+        if rate_limit_status == "MISSING" and (is_resource_intensive or sensitive_route):
+            risk_score += 10
+            score_reasons.append("Missing rate limiting on resource-intensive/sensitive route (+10)")
+
         risk_score = min(100, risk_score)
 
         if risk_score >= 75:
@@ -334,6 +612,8 @@ class ApiSecurityScanner:
             "rate_limit_status": rate_limit_status,
             "request_validation_status": request_val_status,
             "sensitive_data_fields": ", ".join(detected_sensitive_fields) if detected_sensitive_fields else None,
+            "bola_status": bola_status,
+            "mass_assignment_status": mass_assignment_status,
             "risk_score": risk_score,
             "risk_level": risk_level,
             "discovered_via": "OPENAPI_SPEC",

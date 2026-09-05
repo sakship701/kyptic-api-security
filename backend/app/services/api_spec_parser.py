@@ -219,6 +219,9 @@ class OpenApiSpecParser:
                     "op_security": op_security,
                     "global_security": global_security,
                     "security_schemes": security_schemes,
+                    "op_dict": op,
+                    "path_item_dict": path_item,
+                    "root_spec_dict": self.spec,
                 })
 
         return parsed_endpoints

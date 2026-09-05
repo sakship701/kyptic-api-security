@@ -288,6 +288,10 @@ def get_api_security_summary(
     sensitive_data_ep = sum(1 for e in endpoints if e.sensitive_data_fields is not None and len(e.sensitive_data_fields) > 0)
     unconstrained_val_ep = sum(1 for e in endpoints if e.request_validation_status == "UNCONSTRAINED")
 
+    bola_risk_ep = sum(1 for e in endpoints if getattr(e, "bola_status", "NONE") != "NONE")
+    mass_assign_ep = sum(1 for e in endpoints if getattr(e, "mass_assignment_status", "NONE") != "NONE")
+    missing_rate_limit_ep = sum(1 for e in endpoints if e.rate_limit_status == "MISSING")
+
     total_api_findings = len(findings)
     open_api_findings = sum(1 for f in findings if f.status == FindingStatus.OPEN)
 
@@ -301,6 +305,9 @@ def get_api_security_summary(
         "unauthenticated_endpoints": unauthenticated_ep,
         "sensitive_data_endpoints": sensitive_data_ep,
         "unconstrained_validation_endpoints": unconstrained_val_ep,
+        "bola_risk_endpoints": bola_risk_ep,
+        "mass_assignment_endpoints": mass_assign_ep,
+        "missing_rate_limit_endpoints": missing_rate_limit_ep,
         "total_api_findings": total_api_findings,
         "open_api_findings": open_api_findings,
     }

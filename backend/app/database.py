@@ -83,4 +83,12 @@ def update_db_schema() -> None:
             if "resolution_comment" not in columns:
                 conn.execute(text("ALTER TABLE findings ADD COLUMN resolution_comment TEXT"))
             if "resolved_at" not in columns:
-                conn.execute(text("ALTER TABLE findings ADD COLUMN resolved_at DATETIME"))
+                conn.execute(text("ALTER TABLE findings ADD COLUMN resolved_at DATETIME"))
+
+    if "api_endpoints" in inspector.get_table_names():
+        columns = [col['name'] for col in inspector.get_columns('api_endpoints')]
+        with engine.begin() as conn:
+            if "bola_status" not in columns:
+                conn.execute(text("ALTER TABLE api_endpoints ADD COLUMN bola_status VARCHAR(50) NOT NULL DEFAULT 'NONE'"))
+            if "mass_assignment_status" not in columns:
+                conn.execute(text("ALTER TABLE api_endpoints ADD COLUMN mass_assignment_status VARCHAR(50) NOT NULL DEFAULT 'NONE'"))
