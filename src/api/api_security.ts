@@ -12,6 +12,7 @@ export interface ApiEndpointData {
   sensitive_data_fields: string | null;
   bola_status?: string | null;
   mass_assignment_status?: string | null;
+  dast_status?: string | null;
   risk_score: number;
   risk_level: string;
   discovered_via: string;
@@ -34,6 +35,14 @@ export interface ApiSecuritySummaryData {
   missing_rate_limit_endpoints?: number;
   total_api_findings: number;
   open_api_findings: number;
+  verified_vulnerable_endpoints?: number;
+  verified_secure_endpoints?: number;
+  inconclusive_endpoints?: number;
+  untested_endpoints?: number;
+  static_findings_count?: number;
+  dast_findings_count?: number;
+  last_dast_scan_status?: string | null;
+  last_dast_scan_at?: string | null;
 }
 
 export interface OpenApiIngestResponseData {
@@ -115,4 +124,22 @@ export const fetchApiSecuritySummary = async (projectId: number): Promise<ApiSec
     throw new Error(getErrorMessage(response));
   }
   return response.json() as Promise<ApiSecuritySummaryData>;
+};
+
+export const runDastActiveScan = async (projectId: number): Promise<any> => {
+  const response = await fetch(`${API_BASE_URL}/api/projects/${projectId}/api-security/dast/scan`, {
+    method: 'POST',
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    try {
+      const errorJson = JSON.parse(errorText);
+      throw new Error(errorJson.detail || getErrorMessage(response));
+    } catch {
+      throw new Error(errorText || getErrorMessage(response));
+    }
+  }
+
+  return response.json();
 };

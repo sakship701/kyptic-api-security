@@ -30,9 +30,10 @@ class ApiEndpoint(Base):
     risk_score: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     risk_level: Mapped[str] = mapped_column(String(20), nullable=False, default="INFO")
     
-    # Milestone 2 Security Attributes
+    # Milestone 2 & 3 Security Attributes
     bola_status: Mapped[str] = mapped_column(String(50), nullable=False, default="NONE")
     mass_assignment_status: Mapped[str] = mapped_column(String(50), nullable=False, default="NONE")
+    dast_status: Mapped[str] = mapped_column(String(50), nullable=False, default="UNTESTED")
 
     # Discovery & Lifecycle Metadata
     discovered_via: Mapped[str] = mapped_column(String(50), nullable=False, default="OPENAPI_SPEC")

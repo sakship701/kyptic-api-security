@@ -44,6 +44,16 @@ def update_db_schema() -> None:
                 conn.execute(text("ALTER TABLE projects ADD COLUMN last_ingested_at DATETIME"))
             if "ingestion_error" not in columns:
                 conn.execute(text("ALTER TABLE projects ADD COLUMN ingestion_error TEXT"))
+            if "api_target_url" not in columns:
+                conn.execute(text("ALTER TABLE projects ADD COLUMN api_target_url VARCHAR(500)"))
+            if "api_dast_enabled" not in columns:
+                conn.execute(text("ALTER TABLE projects ADD COLUMN api_dast_enabled BOOLEAN NOT NULL DEFAULT 0"))
+            if "api_auth_type" not in columns:
+                conn.execute(text("ALTER TABLE projects ADD COLUMN api_auth_type VARCHAR(50) DEFAULT 'NONE'"))
+            if "api_auth_header_name" not in columns:
+                conn.execute(text("ALTER TABLE projects ADD COLUMN api_auth_header_name VARCHAR(100) DEFAULT 'Authorization'"))
+            if "api_auth_token_hash" not in columns:
+                conn.execute(text("ALTER TABLE projects ADD COLUMN api_auth_token_hash VARCHAR(255)"))
 
     if "scans" in inspector.get_table_names():
         columns = [col['name'] for col in inspector.get_columns('scans')]
@@ -91,4 +101,6 @@ def update_db_schema() -> None:
             if "bola_status" not in columns:
                 conn.execute(text("ALTER TABLE api_endpoints ADD COLUMN bola_status VARCHAR(50) NOT NULL DEFAULT 'NONE'"))
             if "mass_assignment_status" not in columns:
-                conn.execute(text("ALTER TABLE api_endpoints ADD COLUMN mass_assignment_status VARCHAR(50) NOT NULL DEFAULT 'NONE'"))
+                conn.execute(text("ALTER TABLE api_endpoints ADD COLUMN mass_assignment_status VARCHAR(50) NOT NULL DEFAULT 'NONE'"))
+            if "dast_status" not in columns:
+                conn.execute(text("ALTER TABLE api_endpoints ADD COLUMN dast_status VARCHAR(50) NOT NULL DEFAULT 'UNTESTED'"))

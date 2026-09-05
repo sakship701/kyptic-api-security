@@ -14,13 +14,152 @@ from app.schemas.api_security import (
     ApiEndpointResponse,
     ApiSecuritySummaryResponse,
     OpenApiIngestResponse,
+    DastTargetConfigRequest,
+    DastTargetConfigResponse,
+    DastTestConnectionResponse,
 )
 from app.services.api_spec_parser import OpenApiSpecParser, MAX_SPEC_SIZE
 from app.services.api_security_scanner import ApiSecurityScanner
 from app.services.storage_service import get_project_dir
+from app.services.ssrf_protection import is_ssrf_safe_url
+from app.services.dast_http_client import DastHttpClient, DastAuthContext, redact_secrets, DastError
+from app.services.dast_probes import DastProbeEngine, DastVerificationStatus, map_probe_result_to_finding
 
 router = APIRouter(prefix="/api", tags=["api-security"])
 
+
+@router.get(
+    "/projects/{project_id}/api-security/dast-config",
+    response_model=DastTargetConfigResponse,
+)
+def get_dast_config(
+    project_id: int,
+    db: Session = Depends(get_db),
+) -> dict:
+    project = db.get(Project, project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    target_url = project.api_target_url
+    is_safe = False
+    msg = "No live DAST target URL configured."
+    if target_url:
+        is_safe, msg = is_ssrf_safe_url(target_url, allow_localhost=False)
+
+    return {
+        "project_id": project_id,
+        "api_target_url": target_url,
+        "api_dast_enabled": project.api_dast_enabled,
+        "api_auth_type": project.api_auth_type or "NONE",
+        "api_auth_header_name": project.api_auth_header_name or "Authorization",
+        "is_ssrf_safe": is_safe,
+        "message": msg,
+    }
+
+
+@router.put(
+    "/projects/{project_id}/api-security/dast-config",
+    response_model=DastTargetConfigResponse,
+)
+def update_dast_config(
+    project_id: int,
+    config_in: DastTargetConfigRequest,
+    db: Session = Depends(get_db),
+) -> dict:
+    project = db.get(Project, project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    target_url = config_in.api_target_url.strip()
+    is_safe, msg = is_ssrf_safe_url(target_url, allow_localhost=False)
+    if not is_safe:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Target URL SSRF validation failed: {msg}"
+        )
+
+    project.api_target_url = target_url
+    project.api_dast_enabled = config_in.api_dast_enabled
+    project.api_auth_type = (config_in.api_auth_type or "NONE").upper()
+    project.api_auth_header_name = config_in.api_auth_header_name or "Authorization"
+    db.commit()
+
+    return {
+        "project_id": project_id,
+        "api_target_url": target_url,
+        "api_dast_enabled": project.api_dast_enabled,
+        "api_auth_type": project.api_auth_type,
+        "api_auth_header_name": project.api_auth_header_name,
+        "is_ssrf_safe": True,
+        "message": "DAST target configuration updated successfully."
+    }
+
+
+@router.post(
+    "/projects/{project_id}/api-security/dast/test-connection",
+    response_model=DastTestConnectionResponse,
+)
+def test_dast_connection(
+    project_id: int,
+    db: Session = Depends(get_db),
+) -> dict:
+    project = db.get(Project, project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    target_url = project.api_target_url
+    if not target_url:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No DAST target URL configured for this project. Update DAST configuration first."
+        )
+
+    is_safe, ssrf_msg = is_ssrf_safe_url(target_url, allow_localhost=False)
+    if not is_safe:
+        return {
+            "status": "BLOCKED",
+            "target_url": target_url,
+            "status_code": None,
+            "elapsed_ms": 0.0,
+            "message": redact_secrets(f"SSRF validation blocked request: {ssrf_msg}")
+        }
+
+    client = DastHttpClient(allow_localhost=False)
+    auth_ctx = DastAuthContext(
+        auth_type=project.api_auth_type or "NONE",
+        header_name=project.api_auth_header_name or "Authorization"
+    )
+
+    try:
+        response = client.execute_request(
+            url=target_url,
+            method="HEAD",
+            auth_context=auth_ctx,
+            timeout=5.0
+        )
+        return {
+            "status": "SUCCESS" if response.status_code and response.status_code < 500 else "FAILED",
+            "target_url": target_url,
+            "status_code": response.status_code,
+            "elapsed_ms": response.elapsed_ms,
+            "message": f"Successfully connected to live target (HTTP {response.status_code})."
+        }
+    except DastError as e:
+        return {
+            "status": "FAILED",
+            "target_url": target_url,
+            "status_code": None,
+            "elapsed_ms": 0.0,
+            "message": redact_secrets(str(e))
+        }
+    except Exception as e:
+        return {
+            "status": "FAILED",
+            "target_url": target_url,
+            "status_code": None,
+            "elapsed_ms": 0.0,
+            "message": redact_secrets(f"Connection test failed: {str(e)}")
+        }
 
 @router.post(
     "/projects/{project_id}/ingest/openapi",
@@ -216,6 +355,180 @@ def run_api_security_analysis(
         )
 
 
+@router.post(
+    "/projects/{project_id}/api-security/dast/scan",
+    response_model=ScanResponse,
+    status_code=status.HTTP_200_OK,
+)
+def run_dast_active_scan(
+    project_id: int,
+    db: Session = Depends(get_db),
+) -> Scan:
+    project = db.get(Project, project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    if not project.api_dast_enabled:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="DAST dynamic testing is disabled for this project. Enable DAST in project settings first."
+        )
+
+    target_url = project.api_target_url
+    if not target_url:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No DAST target URL configured for this project."
+        )
+
+    is_safe, ssrf_msg = is_ssrf_safe_url(target_url, allow_localhost=False)
+    if not is_safe:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Target URL SSRF validation failed: {ssrf_msg}"
+        )
+
+    endpoints = list(db.scalars(select(ApiEndpoint).where(ApiEndpoint.project_id == project_id)).all())
+    if not endpoints:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No endpoints found in inventory to scan. Ingest an OpenAPI spec first."
+        )
+
+    # Phase 3A: Check if a DAST scan is already running
+    existing_running_scan = db.scalar(
+        select(Scan).where(
+            Scan.project_id == project_id,
+            Scan.status == ScanStatus.RUNNING,
+            Scan.scanner == "dast-active-probe"
+        )
+    )
+    if existing_running_scan:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A DAST active verification scan is currently running for this project."
+        )
+
+    # 1. QUEUED lifecycle state
+    scan = Scan(
+        project_id=project_id,
+        status=ScanStatus.QUEUED,
+        progress=0,
+        current_phase="Queued",
+        scanner="dast-active-probe",
+        scanner_version="1.0.0",
+        dast_status="QUEUED",
+        started_at=datetime.utcnow(),
+        target_path=target_url,
+    )
+    db.add(scan)
+    db.commit()
+    db.refresh(scan)
+
+    # 2. RUNNING lifecycle state
+    scan.status = ScanStatus.RUNNING
+    scan.current_phase = "Running Dynamic Probes"
+    scan.dast_status = "RUNNING"
+    db.commit()
+
+    start_time = time.time()
+
+    try:
+        client = DastHttpClient(allow_localhost=False)
+        auth_ctx = DastAuthContext(
+            auth_type=project.api_auth_type or "NONE",
+            header_name=project.api_auth_header_name or "Authorization",
+        )
+        probe_engine = DastProbeEngine(client=client, base_url=target_url, auth_context=auth_ctx)
+
+        # Existing findings for deduplication & triage preservation
+        existing_findings_list = list(db.scalars(select(Finding).where(Finding.project_id == project_id)).all())
+        existing_findings_map = {f.fingerprint: f for f in existing_findings_list if f.fingerprint}
+
+        new_findings: list[Finding] = []
+        total_ep_count = len(endpoints)
+
+        for idx, ep in enumerate(endpoints):
+            # Probe resilience (Phase 3A): handle endpoint probe errors cleanly without aborting scan
+            probe_results = []
+            try:
+                probe_results = [
+                    probe_engine.probe_auth_enforcement(ep),
+                    probe_engine.probe_bola(ep),
+                    probe_engine.probe_mass_assignment(ep),
+                    probe_engine.probe_rate_limiting(ep),
+                ]
+            except Exception as ep_err:
+                probe_results = [
+                    DastProbeResult(
+                        endpoint_id=ep.id,
+                        probe_type=DastProbeType.AUTH_ENFORCEMENT,
+                        status=DastVerificationStatus.INCONCLUSIVE,
+                        evidence=f"Endpoint probing interrupted: {redact_secrets(str(ep_err))}",
+                    )
+                ]
+
+            # Endpoint-level DAST Status (Phase 3B)
+            has_vuln = any(pr.status == DastVerificationStatus.VERIFIED_VULNERABLE for pr in probe_results)
+            has_inconclusive = any(pr.status == DastVerificationStatus.INCONCLUSIVE for pr in probe_results)
+            has_secure = any(pr.status == DastVerificationStatus.VERIFIED_SECURE for pr in probe_results)
+
+            if has_vuln:
+                ep.dast_status = "VERIFIED_VULNERABLE"
+            elif has_inconclusive:
+                ep.dast_status = "INCONCLUSIVE"
+            elif has_secure:
+                ep.dast_status = "VERIFIED_SECURE"
+            else:
+                ep.dast_status = "UNTESTED"
+
+            ep.updated_at = datetime.utcnow()
+
+            for pr in probe_results:
+                if pr.status == DastVerificationStatus.VERIFIED_VULNERABLE:
+                    finding = map_probe_result_to_finding(
+                        project_id=project_id,
+                        scan_id=scan.id,
+                        endpoint=ep,
+                        probe_result=pr,
+                        existing_findings_map=existing_findings_map,
+                    )
+                    if finding:
+                        new_findings.append(finding)
+
+            scan.progress = int(((idx + 1) / total_ep_count) * 100)
+            db.commit()
+
+        if new_findings:
+            db.add_all(new_findings)
+
+        duration = round(time.time() - start_time, 2)
+        scan.status = ScanStatus.COMPLETED
+        scan.current_phase = "Completed"
+        scan.dast_status = "COMPLETED"
+        scan.completed_at = datetime.utcnow()
+        scan.duration = duration
+        scan.result_count = len(new_findings)
+        scan.progress = 100
+        db.commit()
+        db.refresh(scan)
+
+        return scan
+    except Exception as e:
+        db.rollback()
+        scan.status = ScanStatus.FAILED
+        scan.dast_status = "FAILED"
+        scan.current_phase = "Failed"
+        scan.completed_at = datetime.utcnow()
+        scan.error_message = redact_secrets(str(e))
+        db.commit()
+        db.refresh(scan)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"DAST scan failed: {redact_secrets(str(e))}"
+        )
+
+
 @router.get(
     "/projects/{project_id}/api-security/endpoints",
     response_model=list[ApiEndpointResponse],
@@ -272,7 +585,7 @@ def get_api_security_summary(
         db.scalars(
             select(Finding).where(
                 Finding.project_id == project_id,
-                Finding.source == FindingSource.API_SECURITY
+                Finding.source.in_([FindingSource.API_SECURITY, FindingSource.DAST])
             )
         ).all()
     )
@@ -295,6 +608,20 @@ def get_api_security_summary(
     total_api_findings = len(findings)
     open_api_findings = sum(1 for f in findings if f.status == FindingStatus.OPEN)
 
+    verified_vulnerable_ep = sum(1 for e in endpoints if getattr(e, "dast_status", "UNTESTED") == "VERIFIED_VULNERABLE")
+    verified_secure_ep = sum(1 for e in endpoints if getattr(e, "dast_status", "UNTESTED") == "VERIFIED_SECURE")
+    inconclusive_ep = sum(1 for e in endpoints if getattr(e, "dast_status", "UNTESTED") == "INCONCLUSIVE")
+    untested_ep = sum(1 for e in endpoints if getattr(e, "dast_status", "UNTESTED") == "UNTESTED")
+
+    static_findings_count = sum(1 for f in findings if f.source == FindingSource.API_SECURITY)
+    dast_findings_count = sum(1 for f in findings if f.source == FindingSource.DAST)
+
+    last_dast_scan = db.scalar(
+        select(Scan)
+        .where(Scan.project_id == project_id, Scan.scanner == "dast-active-probe")
+        .order_by(Scan.id.desc())
+    )
+
     return {
         "total_endpoints": total_endpoints,
         "critical_endpoints": critical_ep,
@@ -310,4 +637,12 @@ def get_api_security_summary(
         "missing_rate_limit_endpoints": missing_rate_limit_ep,
         "total_api_findings": total_api_findings,
         "open_api_findings": open_api_findings,
+        "verified_vulnerable_endpoints": verified_vulnerable_ep,
+        "verified_secure_endpoints": verified_secure_ep,
+        "inconclusive_endpoints": inconclusive_ep,
+        "untested_endpoints": untested_ep,
+        "static_findings_count": static_findings_count,
+        "dast_findings_count": dast_findings_count,
+        "last_dast_scan_status": last_dast_scan.status.value if (last_dast_scan and last_dast_scan.status) else None,
+        "last_dast_scan_at": (last_dast_scan.completed_at or last_dast_scan.started_at) if last_dast_scan else None,
     }

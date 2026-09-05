@@ -8,6 +8,7 @@ import {
   fetchApiSecuritySummary,
   ingestOpenApi,
   analyzeApiSecurity,
+  runDastActiveScan,
   type ApiEndpointData,
   type ApiSecuritySummaryData,
 } from '../../api/api_security';
@@ -20,6 +21,7 @@ export const ApiSecurityDashboard: React.FC = () => {
   const [selectedEndpoint, setSelectedEndpoint] = useState<ApiEndpointData | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [isAnalyzing, setIsAnalyzing] = useState<boolean>(false);
+  const [isDastRunning, setIsDastRunning] = useState<boolean>(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
 
@@ -78,6 +80,22 @@ export const ApiSecurityDashboard: React.FC = () => {
     }
   };
 
+  const handleRunDastScan = async () => {
+    if (!activeNumId) return;
+    setIsDastRunning(true);
+    setErrorMsg(null);
+    setSuccessMsg(null);
+    try {
+      const scanRes = await runDastActiveScan(activeNumId);
+      setSuccessMsg(`DAST active vulnerability probing completed. Found ${scanRes.result_count ?? 0} dynamic findings in ${scanRes.duration ?? 0}s.`);
+      await loadApiData(activeNumId);
+    } catch (err: any) {
+      setErrorMsg(err.message || 'DAST dynamic verification scan failed.');
+    } finally {
+      setIsDastRunning(false);
+    }
+  };
+
   const handleRunAnalysis = async () => {
     if (!activeNumId) return;
     setIsAnalyzing(true);
@@ -129,6 +147,15 @@ export const ApiSecurityDashboard: React.FC = () => {
     }
   };
 
+  const getDastBadgeVariant = (status?: string | null): 'critical' | 'success' | 'medium' | 'neutral' => {
+    switch (status?.toUpperCase()) {
+      case 'VERIFIED_VULNERABLE': return 'critical';
+      case 'VERIFIED_SECURE': return 'success';
+      case 'INCONCLUSIVE': return 'medium';
+      case 'UNTESTED': default: return 'neutral';
+    }
+  };
+
   return (
     <div className="p-4 md:p-container-padding max-w-[1600px] mx-auto w-full flex flex-col gap-stack-lg pb-24 text-on-surface">
       {/* Header & Controls */}
@@ -138,11 +165,23 @@ export const ApiSecurityDashboard: React.FC = () => {
             <div className="flex items-center gap-3 mb-2">
               <span className="material-symbols-outlined text-primary text-3xl">api</span>
               <h1 className="font-display-lg text-[32px] text-white">API Security Decision Dashboard</h1>
-              <Badge variant="primary">Milestone 1 & 2</Badge>
+              <Badge variant="primary">Milestone 1, 2 & DAST Phase 3</Badge>
             </div>
             <p className="text-on-surface-variant text-body-md max-w-3xl">
-              Automated API endpoint discovery, OpenAPI specification analysis, BOLA heuristic detection (API1), authentication auditing (API2), data exposure checking (API3), rate limit verification (API4), mass assignment auditing (API6), and deterministic risk scoring.
+              Automated API endpoint discovery, OpenAPI specification analysis, static security auditing (BOLA API1, Auth API2, Data Exposure API3, Rate Limit API4, Mass Assignment API6), and dynamic DAST active verification probes with deterministic finding correlation.
             </p>
+            {summary?.last_dast_scan_status && (
+              <div className="flex items-center gap-2 mt-3 text-xs text-on-surface-variant font-mono">
+                <span className="material-symbols-outlined text-sm text-primary">history</span>
+                <span>Last DAST Active Verification:</span>
+                <span className={`font-semibold ${summary.last_dast_scan_status === 'completed' ? 'text-success' : summary.last_dast_scan_status === 'failed' ? 'text-error' : 'text-warning'}`}>
+                  {summary.last_dast_scan_status.toUpperCase()}
+                </span>
+                {summary.last_dast_scan_at && (
+                  <span>({new Date(summary.last_dast_scan_at).toLocaleString()})</span>
+                )}
+              </div>
+            )}
           </div>
 
           {/* Action Bar */}
@@ -175,13 +214,25 @@ export const ApiSecurityDashboard: React.FC = () => {
             <Button
               variant="primary"
               onClick={handleRunAnalysis}
-              disabled={isAnalyzing || !activeNumId}
+              disabled={isAnalyzing || isDastRunning || !activeNumId}
               className="flex items-center gap-2"
             >
               <span className={`material-symbols-outlined text-sm ${isAnalyzing ? 'animate-spin' : ''}`}>
                 {isAnalyzing ? 'sync' : 'security'}
               </span>
-              {isAnalyzing ? 'Analyzing API...' : 'Run API Analysis'}
+              {isAnalyzing ? 'Analyzing Spec...' : 'Static Analysis'}
+            </Button>
+
+            <Button
+              variant="secondary"
+              onClick={handleRunDastScan}
+              disabled={isDastRunning || isAnalyzing || !activeNumId}
+              className="flex items-center gap-2 border border-tertiary/40 text-tertiary hover:bg-tertiary/10"
+            >
+              <span className={`material-symbols-outlined text-sm ${isDastRunning ? 'animate-spin' : ''}`}>
+                {isDastRunning ? 'sync' : 'bolt'}
+              </span>
+              {isDastRunning ? 'Probing Target...' : 'Run DAST Active Scan'}
             </Button>
           </div>
         </div>
@@ -216,33 +267,37 @@ export const ApiSecurityDashboard: React.FC = () => {
 
         <GlassPanel variant="high" className="p-6 rounded-xl flex items-center gap-4">
           <div className="w-12 h-12 rounded-xl bg-error/10 border border-error/20 flex items-center justify-center text-error">
-            <span className="material-symbols-outlined text-2xl">warning</span>
+            <span className="material-symbols-outlined text-2xl">gpp_maybe</span>
           </div>
           <div>
             <div className="text-display-md text-3xl font-bold text-error">
-              {(summary?.critical_endpoints ?? 0) + (summary?.high_endpoints ?? 0)}
+              {summary?.verified_vulnerable_endpoints ?? 0}
             </div>
-            <div className="text-on-surface-variant text-sm font-medium">High / Critical Risk Routes</div>
+            <div className="text-on-surface-variant text-sm font-medium">DAST Verified Vulnerable</div>
+          </div>
+        </GlassPanel>
+
+        <GlassPanel variant="high" className="p-6 rounded-xl flex items-center gap-4">
+          <div className="w-12 h-12 rounded-xl bg-success/10 border border-success/20 flex items-center justify-center text-success">
+            <span className="material-symbols-outlined text-2xl">verified</span>
+          </div>
+          <div>
+            <div className="text-display-md text-3xl font-bold text-success">
+              {summary?.verified_secure_endpoints ?? 0}
+            </div>
+            <div className="text-on-surface-variant text-sm font-medium">DAST Verified Secure</div>
           </div>
         </GlassPanel>
 
         <GlassPanel variant="high" className="p-6 rounded-xl flex items-center gap-4">
           <div className="w-12 h-12 rounded-xl bg-warning/10 border border-warning/20 flex items-center justify-center text-warning">
-            <span className="material-symbols-outlined text-2xl">lock_open</span>
+            <span className="material-symbols-outlined text-2xl">help</span>
           </div>
           <div>
-            <div className="text-display-md text-3xl font-bold text-warning">{summary?.unauthenticated_endpoints ?? 0}</div>
-            <div className="text-on-surface-variant text-sm font-medium">Missing Authentication</div>
-          </div>
-        </GlassPanel>
-
-        <GlassPanel variant="high" className="p-6 rounded-xl flex items-center gap-4">
-          <div className="w-12 h-12 rounded-xl bg-tertiary/10 border border-tertiary/20 flex items-center justify-center text-tertiary">
-            <span className="material-symbols-outlined text-2xl">visibility</span>
-          </div>
-          <div>
-            <div className="text-display-md text-3xl font-bold text-tertiary">{summary?.sensitive_data_endpoints ?? 0}</div>
-            <div className="text-on-surface-variant text-sm font-medium">Sensitive Data Exposures</div>
+            <div className="text-display-md text-3xl font-bold text-warning">
+              {summary?.inconclusive_endpoints ?? 0}
+            </div>
+            <div className="text-on-surface-variant text-sm font-medium">Inconclusive Probes</div>
           </div>
         </GlassPanel>
       </div>
@@ -330,6 +385,7 @@ export const ApiSecurityDashboard: React.FC = () => {
                   <th className="p-4 pl-6">Method</th>
                   <th className="p-4">Endpoint Path</th>
                   <th className="p-4">Auth Requirement</th>
+                  <th className="p-4">DAST Active Verification</th>
                   <th className="p-4">Security Signals (BOLA / Mass Assign)</th>
                   <th className="p-4">Sensitive Fields Exposed</th>
                   <th className="p-4">Risk Score</th>
@@ -374,6 +430,13 @@ export const ApiSecurityDashboard: React.FC = () => {
                           <span className="text-[11px] text-on-surface-variant">Rate Limit: Missing</span>
                         )}
                       </div>
+                    </td>
+
+                    {/* DAST Active Verification Status */}
+                    <td className="p-4">
+                      <Badge variant={getDastBadgeVariant(ep.dast_status)}>
+                        {ep.dast_status ? ep.dast_status.replace('_', ' ') : 'UNTESTED'}
+                      </Badge>
                     </td>
 
                     {/* Security Signals (BOLA / Mass Assignment) */}
