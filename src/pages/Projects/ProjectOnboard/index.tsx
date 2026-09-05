@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { useApp } from '../../../context/AppContext';
 import GlassPanel from '../../../components/ui/GlassPanel';
 import { ingestZip, ingestGit, ingestWebsite, fetchProjectSource } from '../../../api/projects';
+import { ingestOpenApi } from '../../../api/api_security';
 
 export const ProjectOnboard: React.FC = () => {
   const navigate = useNavigate();
@@ -47,7 +48,8 @@ export const ProjectOnboard: React.FC = () => {
   const sources = [
     { name: 'Upload ZIP', desc: 'Upload your source code.', icon: 'folder_zip', color: 'text-on-surface' },
     { name: 'Git Repository', desc: 'Connect a Git repository.', icon: 'code', color: 'text-primary' },
-    { name: 'Website URL', desc: 'Provide the URL of a running application for DAST testing.', icon: 'language', color: 'text-on-surface' },
+    { name: 'Website URL', desc: 'Provide URL for DAST testing.', icon: 'language', color: 'text-on-surface' },
+    { name: 'OpenAPI Specification', desc: 'Upload OpenAPI 2.0 / 3.0 / 3.1 spec.', icon: 'api', color: 'text-primary' },
   ];
 
   const handleIngestion = async () => {
@@ -78,6 +80,12 @@ export const ProjectOnboard: React.FC = () => {
           throw new Error('Repository URL is required.');
         }
         await ingestGit(Number(project.id), repoUrl.trim());
+      } else if (sourceType === 'OpenAPI Specification') {
+        if (!selectedFile) {
+          throw new Error('Please select an OpenAPI specification file (.json, .yaml, .yml).');
+        }
+        await ingestOpenApi(Number(project.id), selectedFile);
+        setIngestStatus('READY');
       } else {
         if (!websiteUrl.trim()) {
           throw new Error('Website URL is required.');
@@ -306,7 +314,7 @@ export const ProjectOnboard: React.FC = () => {
               </div>
 
               {/* Grid for Sources */}
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
                 {sources.map((src) => {
                   const isSelected = sourceType === src.name;
                   return (
@@ -556,6 +564,83 @@ export const ProjectOnboard: React.FC = () => {
                       )}
                     </div>
                   </div>
+                </div>
+              )}
+
+              {sourceType === 'OpenAPI Specification' && (
+                <div className="mt-8 p-6 bg-surface-container-low border border-outline-variant rounded-lg">
+                  <div className="flex items-center justify-between mb-4">
+                    <div className="flex items-center gap-3">
+                      <span className="material-symbols-outlined text-primary">api</span>
+                      <h5 className="font-body-md font-medium text-on-surface">OpenAPI Specification Upload</h5>
+                    </div>
+                    <span className="px-3 py-1 bg-surface-variant rounded-full text-xs font-label-mono text-on-surface-variant">
+                      Required
+                    </span>
+                  </div>
+
+                  <div className="flex flex-col items-center justify-center border-dashed border-2 border-outline-variant/60 rounded-lg py-10 bg-surface-dim relative">
+                    <input
+                      type="file"
+                      accept=".json,.yaml,.yml"
+                      onChange={(e) => {
+                        const file = e.target.files?.[0] || null;
+                        setSelectedFile(file);
+                        setIngestStatus('IDLE');
+                        setIngestError(null);
+                      }}
+                      className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                      disabled={ingestStatus === 'INGESTING' || ingestStatus === 'READY'}
+                    />
+                    <span className="material-symbols-outlined text-4xl text-outline mb-2">upload_file</span>
+                    <p className="font-body-md text-on-surface mb-1">
+                      {selectedFile ? selectedFile.name : 'Select or drag your OpenAPI spec file (.json, .yaml, .yml)'}
+                    </p>
+                    <p className="text-xs text-on-surface-variant mb-4">Supported: OpenAPI 2.0, 3.0, 3.1 (Max 50MB)</p>
+                    <button
+                      type="button"
+                      className="px-4 py-2 bg-surface-variant text-on-surface rounded-lg hover:bg-outline-variant transition-colors text-sm font-medium pointer-events-none"
+                    >
+                      {selectedFile ? 'Change Specification File' : 'Browse File'}
+                    </button>
+                  </div>
+
+                  {selectedFile && (
+                    <div className="flex items-center gap-4 mt-6">
+                      <button
+                        type="button"
+                        onClick={handleIngestion}
+                        disabled={ingestStatus === 'INGESTING' || ingestStatus === 'READY'}
+                        className="px-5 py-2.5 bg-primary text-white rounded-lg hover:opacity-90 disabled:opacity-50 transition-all font-medium text-sm cursor-pointer flex items-center gap-2"
+                      >
+                        {ingestStatus === 'INGESTING' ? (
+                          <>
+                            <span className="material-symbols-outlined text-sm animate-spin">sync</span>
+                            <span>Validating & Parsing Specification...</span>
+                          </>
+                        ) : (
+                          <>
+                            <span className="material-symbols-outlined text-sm">cloud_upload</span>
+                            <span>Upload & Ingest OpenAPI Spec</span>
+                          </>
+                        )}
+                      </button>
+
+                      {ingestStatus === 'READY' && (
+                        <div className="flex items-center gap-1.5 text-success font-medium text-sm">
+                          <span className="material-symbols-outlined text-sm font-bold">check_circle</span>
+                          <span>Specification ingested & endpoints parsed successfully</span>
+                        </div>
+                      )}
+
+                      {ingestStatus === 'FAILED' && (
+                        <div className="flex items-center gap-1.5 text-error font-medium text-sm max-w-md">
+                          <span className="material-symbols-outlined text-sm">error</span>
+                          <span className="truncate" title={ingestError || ''}>{ingestError || 'Ingestion failed'}</span>
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
               )}
             </div>

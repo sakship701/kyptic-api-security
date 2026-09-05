@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 from app.models.project import Project
 from app.models.scan import Scan, ScanStatus
 from app.models.finding import Finding, FindingSeverity, FindingSource
+from app.models.api_endpoint import ApiEndpoint
 
 
 def calculate_risk_score(findings: List[Finding]) -> Tuple[int, str, Dict[str, int]]:
@@ -56,9 +57,32 @@ def calculate_risk_score(findings: List[Finding]) -> Tuple[int, str, Dict[str, i
 
 
 def map_owasp_category(category: str, title: str) -> str:
-    cat_upper = category.upper()
-    title_upper = title.upper()
+    cat_upper = (category or "").upper()
+    title_upper = (title or "").upper()
 
+    # OWASP API Security Top 10 (2023)
+    if "API1" in cat_upper or "BOLA" in cat_upper or "OBJECT LEVEL AUTHORIZATION" in cat_upper:
+        return "API1:2023 - Broken Object Level Authorization"
+    if "API2" in cat_upper or ("API" in cat_upper and "AUTH" in cat_upper and "API3" not in cat_upper):
+        return "API2:2023 - Broken Authentication"
+    if "API3" in cat_upper or "PROPERTY LEVEL" in cat_upper or "SENSITIVE DATA" in cat_upper:
+        return "API3:2023 - Broken Object Property Level Authorization"
+    if "API4" in cat_upper or "RESOURCE CONSUMPTION" in cat_upper or ("API" in cat_upper and "RATE" in cat_upper):
+        return "API4:2023 - Unrestricted Resource Consumption"
+    if "API5" in cat_upper or "FUNCTION LEVEL" in cat_upper:
+        return "API5:2023 - Broken Function Level Authorization"
+    if "API6" in cat_upper or "BUSINESS FLOW" in cat_upper or "MASS ASSIGNMENT" in cat_upper:
+        return "API6:2023 - Unrestricted Access to Sensitive Business Flows"
+    if "API7" in cat_upper or ("API" in cat_upper and "SSRF" in cat_upper):
+        return "API7:2023 - Server Side Request Forgery"
+    if "API8" in cat_upper or ("API" in cat_upper and "MISCONFIGURATION" in cat_upper):
+        return "API8:2023 - Security Misconfiguration"
+    if "API9" in cat_upper or "INVENTORY" in cat_upper:
+        return "API9:2023 - Improper Inventory Management"
+    if "API10" in cat_upper or "UNSAFE CONSUMPTION" in cat_upper:
+        return "API10:2023 - Unsafe Consumption of APIs"
+
+    # OWASP Web Top 10 (2021)
     if "A01" in cat_upper or "ACCESS CONTROL" in cat_upper or "IDOR" in cat_upper or "CORS" in cat_upper:
         return "A01:2021 - Broken Access Control"
     if "A02" in cat_upper or "CRYPTOGRAPHIC" in cat_upper or "TLS" in cat_upper or "HTTPS" in cat_upper or "SECRET" in cat_upper:
@@ -124,6 +148,44 @@ class ReportService:
                 "code_snippet": f.code_snippet,
             })
 
+        # Fetch API Endpoints for API Security Section
+        api_endpoints = self.db.query(ApiEndpoint).filter(ApiEndpoint.project_id == project_id).all()
+        api_summary = None
+        formatted_api_endpoints = []
+
+        if api_endpoints:
+            api_summary = {
+                "total_api_endpoints": len(api_endpoints),
+                "critical_endpoints": sum(1 for ep in api_endpoints if ep.risk_level == "CRITICAL"),
+                "high_endpoints": sum(1 for ep in api_endpoints if ep.risk_level == "HIGH"),
+                "medium_endpoints": sum(1 for ep in api_endpoints if ep.risk_level == "MEDIUM"),
+                "low_endpoints": sum(1 for ep in api_endpoints if ep.risk_level == "LOW"),
+                "info_endpoints": sum(1 for ep in api_endpoints if ep.risk_level == "INFO"),
+                "unauthenticated_endpoints": sum(1 for ep in api_endpoints if ep.auth_status == "UNAUTHENTICATED"),
+                "sensitive_data_endpoints": sum(1 for ep in api_endpoints if ep.sensitive_data_fields),
+                "bola_risk_endpoints": sum(1 for ep in api_endpoints if ep.bola_status == "POTENTIAL_BOLA"),
+                "mass_assignment_endpoints": sum(1 for ep in api_endpoints if ep.mass_assignment_status == "SUSPICIOUS_PROPERTIES_EXPOSED"),
+                "rate_limit_risk_endpoints": sum(1 for ep in api_endpoints if ep.rate_limit_status == "MISSING"),
+                "dast_verified_vulnerable_count": sum(1 for ep in api_endpoints if ep.dast_status == "VERIFIED_VULNERABLE"),
+                "dast_verified_secure_count": sum(1 for ep in api_endpoints if ep.dast_status == "VERIFIED_SECURE"),
+                "dast_inconclusive_count": sum(1 for ep in api_endpoints if ep.dast_status == "INCONCLUSIVE"),
+                "dast_untested_count": sum(1 for ep in api_endpoints if not ep.dast_status or ep.dast_status == "UNTESTED"),
+            }
+            for ep in api_endpoints:
+                formatted_api_endpoints.append({
+                    "id": ep.id,
+                    "path": ep.path,
+                    "method": ep.method,
+                    "summary": ep.summary,
+                    "auth_status": ep.auth_status,
+                    "risk_score": ep.risk_score,
+                    "risk_level": ep.risk_level,
+                    "bola_status": ep.bola_status,
+                    "mass_assignment_status": ep.mass_assignment_status,
+                    "rate_limit_status": ep.rate_limit_status,
+                    "dast_status": ep.dast_status or "UNTESTED",
+                })
+
         return {
             "project_id": project.id,
             "project_name": project.name,
@@ -139,6 +201,8 @@ class ReportService:
                 "scans_count": len(scans),
             },
             "owasp_breakdown": owasp_map,
+            "api_security_summary": api_summary,
+            "api_endpoints": formatted_api_endpoints,
             "findings": formatted_findings,
         }
 
@@ -168,6 +232,28 @@ class ReportService:
                 <p style="color: #94a3b8; font-size: 14px; margin: 8px 0;"><strong>Source:</strong> {src} | <strong>Location:</strong> <code>{path}</code></p>
                 <p style="color: #cbd5e1; font-size: 14px;">{html.escape(f['description'])}</p>
                 <pre style="background: #020617; color: #38bdf8; padding: 12px; border-radius: 6px; overflow-x: auto; font-size: 12px;"><code>{snippet}</code></pre>
+            </div>
+            """
+
+        # API Security HTML Section
+        api_html = ""
+        if data.get("api_security_summary"):
+            api_sum = data["api_security_summary"]
+            api_html = f"""
+            <div class="card">
+                <h2 style="margin-top: 0; color: #38bdf8;">API Security Executive Summary</h2>
+                <div class="metric-grid">
+                    <div class="metric-box"><div style="color: #94a3b8; font-size: 12px;">TOTAL ENDPOINTS</div><div class="metric-num">{api_sum['total_api_endpoints']}</div></div>
+                    <div class="metric-box"><div style="color: #ef4444; font-size: 12px;">CRITICAL RISK</div><div class="metric-num" style="color: #ef4444;">{api_sum['critical_endpoints']}</div></div>
+                    <div class="metric-box"><div style="color: #f97316; font-size: 12px;">HIGH RISK</div><div class="metric-num" style="color: #f97316;">{api_sum['high_endpoints']}</div></div>
+                    <div class="metric-box"><div style="color: #eab308; font-size: 12px;">UNAUTHENTICATED</div><div class="metric-num" style="color: #eab308;">{api_sum['unauthenticated_endpoints']}</div></div>
+                </div>
+                <div style="margin-top: 16px; font-size: 13px; color: #cbd5e1;">
+                    <strong>BOLA Risks:</strong> {api_sum['bola_risk_endpoints']} |
+                    <strong>Mass Assignment Risks:</strong> {api_sum['mass_assignment_endpoints']} |
+                    <strong>Unthrottled Routes:</strong> {api_sum['rate_limit_risk_endpoints']} |
+                    <strong>DAST Vulnerable:</strong> <span style="color:#ef4444">{api_sum['dast_verified_vulnerable_count']}</span>
+                </div>
             </div>
             """
 
@@ -218,6 +304,8 @@ class ReportService:
             </div>
         </div>
     </div>
+
+    {api_html}
 
     <div class="card">
         <h2 style="margin-top: 0;">Discovered Security Findings ({len(data['findings'])})</h2>
@@ -351,6 +439,44 @@ class ReportService:
         ]))
         story.append(owasp_table)
         story.append(Spacer(1, 15))
+
+        # API Security Summary & Endpoint Inventory Table (PDF)
+        if data.get("api_security_summary") and data.get("api_endpoints"):
+            story.append(Paragraph("API Security & Endpoint Inventory", section_style))
+            api_sum = data["api_security_summary"]
+            api_info_p = Paragraph(
+                f"<b>Total API Endpoints:</b> {api_sum['total_api_endpoints']} | "
+                f"<b>Critical Risk:</b> {api_sum['critical_endpoints']} | "
+                f"<b>Unauthenticated:</b> {api_sum['unauthenticated_endpoints']} | "
+                f"<b>BOLA Risks:</b> {api_sum['bola_risk_endpoints']} | "
+                f"<b>DAST Vulnerable:</b> {api_sum['dast_verified_vulnerable_count']}",
+                body_style
+            )
+            story.append(api_info_p)
+            story.append(Spacer(1, 8))
+
+            ep_rows = [["Method", "Endpoint Path", "Auth", "Risk Level", "BOLA", "DAST Status"]]
+            for ep in data["api_endpoints"][:25]:  # Bounded table preview
+                ep_rows.append([
+                    ep["method"],
+                    ep["path"][:45],
+                    ep["auth_status"],
+                    ep["risk_level"],
+                    ep["bola_status"],
+                    ep["dast_status"],
+                ])
+
+            ep_table = Table(ep_rows, colWidths=[60, 180, 80, 70, 80, 70])
+            ep_table.setStyle(TableStyle([
+                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#0f172a")),
+                ("TEXTCOLOR", (0, 0), (-1, 0), colors.HexColor("#f8fafc")),
+                ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+                ("FONTSIZE", (0, 0), (-1, -1), 8),
+                ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#cbd5e1")),
+                ("ALIGN", (0, 0), (-1, -1), "LEFT"),
+            ]))
+            story.append(ep_table)
+            story.append(Spacer(1, 15))
 
         # Detailed Findings Section
         story.append(Paragraph(f"Discovered Findings ({len(data['findings'])})", section_style))

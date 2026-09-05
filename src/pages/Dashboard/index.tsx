@@ -3,6 +3,7 @@ import { useApp } from '../../context/AppContext';
 import GlassPanel from '../../components/ui/GlassPanel';
 import Badge from '../../components/ui/Badge';
 import { fetchGlobalFindingsSummary, type GlobalFindingSummaryApiData } from '../../api/findings';
+import { fetchApiSecuritySummary, type ApiSecuritySummaryData } from '../../api/api_security';
 
 export const Dashboard: React.FC = () => {
   const { 
@@ -19,12 +20,23 @@ export const Dashboard: React.FC = () => {
   } = useApp();
 
   const [summaryData, setSummaryData] = useState<GlobalFindingSummaryApiData | null>(null);
+  const [apiSummaryData, setApiSummaryData] = useState<ApiSecuritySummaryData | null>(null);
 
   useEffect(() => {
     void fetchGlobalFindingsSummary()
       .then(setSummaryData)
       .catch(() => setSummaryData(null));
   }, [isScanning]);
+
+  useEffect(() => {
+    if (activeProjectId && !isNaN(Number(activeProjectId))) {
+      void fetchApiSecuritySummary(Number(activeProjectId))
+        .then(setApiSummaryData)
+        .catch(() => setApiSummaryData(null));
+    } else {
+      setApiSummaryData(null);
+    }
+  }, [activeProjectId, isScanning]);
 
   const handleStartScan = () => {
     void startScan(activeProjectId).catch(() => undefined);
@@ -127,28 +139,36 @@ export const Dashboard: React.FC = () => {
 
           {/* Attack Surface Overview & Live Scan Status Row */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-gutter">
-            {/* Attack Surface Overview */}
+            {/* Attack Surface & API Security Overview */}
             <div className="card-base p-6 rounded-xl bg-gradient-to-br from-[#11151D] to-[#0A0D12]">
-              <h3 className="font-headline-md text-headline-md text-on-surface mb-4">Attack Surface Overview</h3>
+              <div className="flex justify-between items-center mb-4">
+                <h3 className="font-headline-md text-headline-md text-on-surface">API Security Surface</h3>
+                <span className="text-xs text-primary font-mono bg-primary/10 px-2 py-0.5 rounded border border-primary/20">
+                  {apiSummaryData ? `${apiSummaryData.total_endpoints} Endpoints` : 'No API Data'}
+                </span>
+              </div>
               <div className="grid grid-cols-2 gap-4">
                 <div className="bg-surface-container/50 p-4 rounded-lg border border-outline-variant/50 flex flex-col justify-center">
-                  <span className="text-on-surface-variant text-sm mb-1">Applications</span>
-                  <span className="text-white font-display-lg text-2xl">28</span>
-                </div>
-                <div className="bg-surface-container/50 p-4 rounded-lg border border-outline-variant/50 flex flex-col justify-center">
-                  <span className="text-on-surface-variant text-sm mb-1">APIs</span>
-                  <span className="text-white font-display-lg text-2xl">142</span>
-                </div>
-                <div className="bg-surface-container/50 p-4 rounded-lg border border-outline-variant/50 flex flex-col justify-center">
-                  <span className="text-on-surface-variant text-sm mb-1">Endpoints</span>
-                  <span className="text-white font-display-lg text-2xl">8,405</span>
+                  <span className="text-on-surface-variant text-sm mb-1">API Endpoints</span>
+                  <span className="text-white font-display-lg text-2xl">{apiSummaryData?.total_endpoints ?? 0}</span>
                 </div>
                 <div className="bg-surface-container/50 p-4 rounded-lg border border-error/30 flex flex-col justify-center relative overflow-hidden">
-                  <div className="absolute -right-2 -bottom-2 text-error/10">
-                    <span className="material-symbols-outlined text-[64px]">warning</span>
-                  </div>
-                  <span className="text-on-surface-variant text-sm mb-1 relative z-10">High-risk Routes</span>
-                  <span className="text-error font-display-lg text-2xl relative z-10">47</span>
+                  <span className="text-on-surface-variant text-sm mb-1 relative z-10">High/Critical Routes</span>
+                  <span className="text-error font-display-lg text-2xl relative z-10">
+                    {(apiSummaryData?.critical_endpoints ?? 0) + (apiSummaryData?.high_endpoints ?? 0)}
+                  </span>
+                </div>
+                <div className="bg-surface-container/50 p-4 rounded-lg border border-[#ff9800]/30 flex flex-col justify-center">
+                  <span className="text-on-surface-variant text-sm mb-1">Unauthenticated</span>
+                  <span className="text-[#ff9800] font-display-lg text-2xl">
+                    {apiSummaryData?.unauthenticated_endpoints ?? 0}
+                  </span>
+                </div>
+                <div className="bg-surface-container/50 p-4 rounded-lg border border-primary/30 flex flex-col justify-center">
+                  <span className="text-on-surface-variant text-sm mb-1">DAST Verified Vuln</span>
+                  <span className="text-primary font-display-lg text-2xl">
+                    {apiSummaryData?.verified_vulnerable_endpoints ?? 0}
+                  </span>
                 </div>
               </div>
             </div>

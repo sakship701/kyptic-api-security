@@ -27,6 +27,10 @@ interface DetailData {
   pocExploit: string;
   resolutionComment?: string | null;
   resolvedAt?: string | null;
+  source?: string;
+  sourceLabel?: string;
+  projectId?: number;
+  endpointPath?: string | null;
 }
 
 export const FindingDetail: React.FC = () => {
@@ -252,6 +256,14 @@ curl -H "Authorization: Bearer eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJ1c2VyIjoiY
         const severity = finding.severity === 'critical' ? 'Critical' : finding.severity === 'high' ? 'High' : finding.severity === 'medium' ? 'Medium' : 'Low';
         const status = finding.status === 'open' ? 'Open' : finding.status === 'resolved' ? 'Resolved' : 'False Positive';
         const scannerInfo = finding.scanner_name ? ` (Detected by ${finding.scanner_name}${finding.scanner_version ? ' v' + finding.scanner_version : ''})` : '';
+        let sourceLabel = 'SAST';
+        if (finding.source === 'api_security') sourceLabel = 'API SECURITY';
+        else if (finding.source === 'dast') sourceLabel = 'DAST ACTIVE PROBE';
+        else if (finding.source === 'secrets') sourceLabel = 'SECRETS';
+        else if (finding.source === 'sca') sourceLabel = 'SCA';
+        else if (finding.source === 'sast') sourceLabel = 'SAST';
+        else sourceLabel = (finding.source || 'SAST').toUpperCase();
+
         setApiFinding({
           vulnId: finding.rule_id ? finding.rule_id : `Finding-${finding.id}`,
           title: finding.title,
@@ -264,7 +276,7 @@ curl -H "Authorization: Bearer eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJ1c2VyIjoiY
           remediationTime: '30 Mins',
           impact: severity === 'Critical' ? 'Critical' : severity === 'High' ? 'High' : 'Medium',
           exploitability: severity === 'Critical' ? 'Easy' : 'Moderate',
-          endpoint: finding.source.toUpperCase(),
+          endpoint: sourceLabel,
           file: finding.file_path,
           description: finding.description + scannerInfo,
           rootCause: finding.source === 'sca' 
@@ -276,10 +288,14 @@ curl -H "Authorization: Bearer eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJ1c2VyIjoiY
             : 'Remediation details will be supplied by a future security engine.',
           startLine: finding.line_number ?? 1,
           highlightedLines: finding.line_number ? [finding.line_number] : [],
-          httpEvidence: 'No HTTP evidence for static code/dependency findings.',
-          pocExploit: 'No exploit payload required for dependency vulnerability findings.',
+          httpEvidence: finding.code_snippet || 'No HTTP evidence available.',
+          pocExploit: 'No exploit payload required.',
           resolutionComment: finding.resolution_comment,
           resolvedAt: finding.resolved_at,
+          source: finding.source,
+          sourceLabel,
+          projectId: finding.project_id,
+          endpointPath: (finding.source === 'api_security' || finding.source === 'dast') ? finding.file_path : null,
         });
         setStatusState(status);
         setStatusInitialized(true);
@@ -421,6 +437,11 @@ curl -H "Authorization: Bearer eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJ1c2VyIjoiY
           </h1>
           
           <div className="flex flex-wrap items-center gap-3">
+            {currentFinding.sourceLabel && (
+              <span className="px-2.5 py-1 rounded font-mono font-bold text-xs tracking-wider bg-primary/10 border border-primary/30 text-primary uppercase">
+                {currentFinding.sourceLabel}
+              </span>
+            )}
             <span className={`px-2 py-1 rounded border text-sm font-medium flex items-center gap-1 ${
               isCritical ? 'bg-error-container/20 border-error-container text-error' : isHigh ? 'bg-[#ff9800]/10 border-[#ff9800]/30 text-[#ff9800]' : 'bg-[#ffeb3b]/10 border-[#ffeb3b]/30 text-[#ffeb3b]'
             }`}>
@@ -459,6 +480,20 @@ curl -H "Authorization: Bearer eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJ1c2VyIjoiY
 
         {/* Triage Action Buttons */}
         <div className="flex flex-wrap gap-2">
+          {(currentFinding.source === 'api_security' || currentFinding.source === 'dast' || currentFinding.endpointPath || (currentFinding.file && (currentFinding.file.startsWith('/') || currentFinding.file.includes('/api/')))) && (
+            <button
+              onClick={() => {
+                const projId = currentFinding.projectId || '';
+                const targetPath = currentFinding.endpointPath || currentFinding.file;
+                navigate(`/api-security?projectId=${projId}&endpointPath=${encodeURIComponent(targetPath)}`);
+              }}
+              className="px-3 py-2 rounded-lg bg-gradient-to-r from-[#2E90FA] to-[#005fb0] text-white hover:brightness-110 transition-all font-semibold flex items-center gap-1 text-xs shadow-lg cursor-pointer border-none"
+            >
+              <span className="material-symbols-outlined text-[16px]">api</span>
+              View API Endpoint
+            </button>
+          )}
+
           {statusState === 'Open' ? (
             <>
               <button 

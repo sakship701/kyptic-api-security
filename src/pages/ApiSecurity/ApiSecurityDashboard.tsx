@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { useApp } from '../../context/AppContext';
 import GlassPanel from '../../components/ui/GlassPanel';
 import Badge from '../../components/ui/Badge';
@@ -15,6 +16,9 @@ import {
 
 export const ApiSecurityDashboard: React.FC = () => {
   const { projects, activeProjectId, setActiveProjectId } = useApp();
+  const [searchParams] = useSearchParams();
+  const urlProjectId = searchParams.get('projectId');
+  const urlEndpointPath = searchParams.get('endpointPath');
 
   const [summary, setSummary] = useState<ApiSecuritySummaryData | null>(null);
   const [endpoints, setEndpoints] = useState<ApiEndpointData[]>([]);
@@ -37,6 +41,12 @@ export const ApiSecurityDashboard: React.FC = () => {
   const [selectedRiskFilter, setSelectedRiskFilter] = useState<string>('ALL');
 
   const activeNumId = activeProjectId ? Number(activeProjectId) : 0;
+
+  useEffect(() => {
+    if (urlProjectId && urlProjectId !== activeProjectId) {
+      setActiveProjectId(urlProjectId);
+    }
+  }, [urlProjectId, activeProjectId, setActiveProjectId]);
 
   const loadApiData = async (projId: number) => {
     if (!projId) return;
@@ -61,6 +71,21 @@ export const ApiSecurityDashboard: React.FC = () => {
       void loadApiData(activeNumId);
     }
   }, [activeProjectId]);
+
+  useEffect(() => {
+    if (urlEndpointPath && endpoints.length > 0) {
+      const decodedPath = decodeURIComponent(urlEndpointPath);
+      const matched = endpoints.find(
+        (ep) =>
+          ep.path === decodedPath ||
+          `${ep.method} ${ep.path}` === decodedPath ||
+          decodedPath.endsWith(ep.path)
+      );
+      if (matched) {
+        setSelectedEndpoint(matched);
+      }
+    }
+  }, [urlEndpointPath, endpoints]);
 
   const handleIngestOpenApi = async () => {
     if (!activeNumId || !selectedFile) return;

@@ -10,6 +10,8 @@ interface FindingItem {
   title: string;
   component: string;
   componentType: 'api' | 'code' | 'security' | 'description';
+  sourceLabel: string;
+  sourceType: string;
   cwe: string;
   owasp: string;
   cvss: number;
@@ -17,6 +19,7 @@ interface FindingItem {
   status: 'Open' | 'Resolved' | 'False Positive';
   aiValidated: boolean;
   exploitable: boolean;
+  projectId: number;
 }
 
 export const FindingsList: React.FC = () => {
@@ -42,20 +45,33 @@ export const FindingsList: React.FC = () => {
   const [findingsLoading, setFindingsLoading] = useState(true);
   const [findingsError, setFindingsError] = useState<string | null>(null);
 
-  const mapFinding = (finding: FindingApiData): FindingItem => ({
-    id: String(finding.id),
-    severity: finding.severity === 'critical' ? 'Critical' : finding.severity === 'high' ? 'High' : finding.severity === 'medium' ? 'Medium' : 'Low',
-    title: finding.title,
-    component: finding.file_path,
-    componentType: finding.source === 'dast' ? 'api' : finding.source === 'sca' ? 'security' : 'code',
-    cwe: finding.source === 'sca' ? (finding.rule_id || 'SCA Vulnerability') : finding.category.startsWith('A') ? finding.category : 'Security Finding',
-    owasp: finding.source === 'sca' ? 'Dependency Vulnerability' : finding.category,
-    cvss: finding.cvss ?? 0,
-    confidence: 100,
-    status: finding.status === 'open' ? 'Open' : finding.status === 'resolved' ? 'Resolved' : 'False Positive',
-    aiValidated: finding.source === 'correlation',
-    exploitable: finding.severity === 'critical',
-  });
+  const mapFinding = (finding: FindingApiData): FindingItem => {
+    let sourceLabel = 'SAST';
+    if (finding.source === 'api_security') sourceLabel = 'API SECURITY';
+    else if (finding.source === 'dast') sourceLabel = 'DAST ACTIVE PROBE';
+    else if (finding.source === 'secrets') sourceLabel = 'SECRETS';
+    else if (finding.source === 'sca') sourceLabel = 'SCA';
+    else if (finding.source === 'sast') sourceLabel = 'SAST';
+    else sourceLabel = (finding.source || 'SAST').toUpperCase();
+
+    return {
+      id: String(finding.id),
+      severity: finding.severity === 'critical' ? 'Critical' : finding.severity === 'high' ? 'High' : finding.severity === 'medium' ? 'Medium' : 'Low',
+      title: finding.title,
+      component: finding.file_path,
+      componentType: (finding.source === 'dast' || finding.source === 'api_security') ? 'api' : finding.source === 'sca' ? 'security' : 'code',
+      sourceLabel,
+      sourceType: finding.source,
+      cwe: finding.source === 'sca' ? (finding.rule_id || 'SCA Vulnerability') : finding.cwe || 'Security Finding',
+      owasp: finding.source === 'sca' ? 'Dependency Vulnerability' : finding.owasp || finding.category,
+      cvss: finding.cvss ?? 0,
+      confidence: 100,
+      status: finding.status === 'open' ? 'Open' : finding.status === 'resolved' ? 'Resolved' : 'False Positive',
+      aiValidated: finding.source === 'correlation',
+      exploitable: finding.severity === 'critical',
+      projectId: finding.project_id,
+    };
+  };
 
   useEffect(() => {
     setFindingsLoading(true);
@@ -400,7 +416,10 @@ export const FindingsList: React.FC = () => {
                           <span className={`severity-badge ${sevBadgeClass}`}>{item.severity}</span>
                         </td>
                         <td className="py-3 px-4">
-                          <div className="font-medium text-on-surface mb-1 flex items-center gap-2">
+                          <div className="font-medium text-on-surface mb-1 flex items-center gap-2 flex-wrap">
+                            <span className="text-[10px] px-1.5 py-0.5 rounded font-mono font-bold tracking-wider bg-surface-container-high border border-outline-variant/40 text-primary">
+                              {item.sourceLabel}
+                            </span>
                             <span>{item.title}</span>
                             {item.aiValidated && (
                               <span className="material-symbols-outlined text-primary text-[14px]" title="AI Validated">

@@ -103,6 +103,21 @@ class OpenApiSpecParser:
         if "paths" not in self.spec or not isinstance(self.spec.get("paths"), dict):
             raise ValueError("Invalid OpenAPI specification: missing required 'paths' definition.")
 
+        self._validate_no_remote_refs(self.spec)
+
+    def _validate_no_remote_refs(self, node: Any) -> None:
+        if isinstance(node, dict):
+            for k, v in node.items():
+                if k == "$ref" and isinstance(v, str):
+                    lowered = v.lower()
+                    if lowered.startswith(("http://", "https://", "file://", "ftp://")) or ".." in v:
+                        raise ValueError(f"Remote or unsafe $ref pointers are rejected for security: '{v}'")
+                else:
+                    self._validate_no_remote_refs(v)
+        elif isinstance(node, list):
+            for item in node:
+                self._validate_no_remote_refs(item)
+
     def get_version(self) -> str:
         if "swagger" in self.spec:
             return f"Swagger {self.spec['swagger']}"

@@ -1,5 +1,7 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { useApp } from '../../context/AppContext';
+import { fetchApiEndpoints, type ApiEndpointData } from '../../api/api_security';
 
 interface GraphNode {
   id: string;
@@ -24,14 +26,24 @@ interface GraphNode {
 
 export const RiskMap: React.FC = () => {
   const navigate = useNavigate();
+  const { activeProjectId } = useApp();
 
   // Graph state: active node, zoom factor, explorer expanded state
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>('node-endpoint-login');
   const [zoomScale, setZoomScale] = useState<number>(0.9);
   const [isExplorerExpanded, setIsExplorerExpanded] = useState<boolean>(true);
+  const [apiEndpoints, setApiEndpoints] = useState<ApiEndpointData[]>([]);
+
+  useEffect(() => {
+    if (activeProjectId && !isNaN(Number(activeProjectId))) {
+      void fetchApiEndpoints(Number(activeProjectId))
+        .then(setApiEndpoints)
+        .catch(() => setApiEndpoints([]));
+    }
+  }, [activeProjectId]);
 
   // Nodes database
-  const nodes: GraphNode[] = [
+  const staticNodes: GraphNode[] = [
     {
       id: 'node-root',
       label: 'Core Backend',
@@ -149,6 +161,32 @@ export const RiskMap: React.FC = () => {
       }
     }
   ];
+
+  const dynamicApiNodes: GraphNode[] = apiEndpoints.map((ep, idx) => {
+    const isCrit = ep.risk_level === 'CRITICAL' || ep.risk_level === 'HIGH';
+    const isWarn = ep.risk_level === 'MEDIUM';
+    return {
+      id: `dynamic-api-${ep.id}`,
+      label: `${ep.method} ${ep.path}`,
+      type: 'endpoint',
+      status: isCrit ? 'critical' : isWarn ? 'warning' : 'safe',
+      icon: 'api',
+      x: 850 + (idx % 2 === 0 ? 0 : 40),
+      y: 450 + (idx + 1) * 90,
+      score: ep.risk_score,
+      details: {
+        vulnName: ep.summary || `API Asset: ${ep.method} ${ep.path}`,
+        owasp: `Auth: ${ep.auth_status} | BOLA: ${ep.bola_status || 'N/A'}`,
+        cwe: `OWASP API Security Top 10`,
+        cvss: ep.risk_score,
+        description: `API Endpoint ${ep.method} ${ep.path}. Auth Status: ${ep.auth_status}. Validation: ${ep.request_validation_status}. Rate Limit: ${ep.rate_limit_status}.`,
+        sastDesc: `Sensitive Data Fields: ${ep.sensitive_data_fields || 'None'}. Mass Assignment: ${ep.mass_assignment_status || 'NOT_EVALUATED'}.`,
+        dastDesc: `DAST Active Verification Status: ${ep.dast_status || 'UNTESTED'}`,
+      },
+    };
+  });
+
+  const nodes: GraphNode[] = [...staticNodes, ...dynamicApiNodes];
 
   // Resolve active detail matching
   const selectedNode = selectedNodeId ? nodes.find(n => n.id === selectedNodeId) : null;

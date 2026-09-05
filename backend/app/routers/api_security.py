@@ -1,5 +1,6 @@
 import time
 from datetime import datetime
+from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
@@ -175,6 +176,16 @@ async def ingest_openapi_spec(
     if project is None:
         raise HTTPException(status_code=404, detail="Project not found")
 
+    # Enforce Upload File Extension & Path Traversal Guard
+    raw_filename = file.filename or "openapi_spec.json"
+    safe_filename = Path(raw_filename).name
+    ext = Path(safe_filename).suffix.lower()
+    if ext not in (".json", ".yaml", ".yml"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Unsupported specification file format. Only .json, .yaml, and .yml extensions are accepted."
+        )
+
     # Enforce Upload File Size
     content_bytes = await file.read()
     if len(content_bytes) > MAX_SPEC_SIZE:
@@ -195,7 +206,7 @@ async def ingest_openapi_spec(
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Failed to process specification file: {str(e)}"
+            detail="Failed to process specification file."
         )
 
     if not endpoints_data:
@@ -207,7 +218,6 @@ async def ingest_openapi_spec(
     # Store spec file safely in project directory
     project_dir = get_project_dir(project_id)
     project_dir.mkdir(parents=True, exist_ok=True)
-    filename = file.filename or "openapi_spec.json"
     spec_save_path = project_dir / "openapi_spec.raw"
     spec_save_path.write_bytes(content_bytes)
 

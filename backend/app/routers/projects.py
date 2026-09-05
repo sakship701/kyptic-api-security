@@ -158,6 +158,16 @@ def ingest_website(
         )
 
 
+@router.post("/{project_id}/ingest/openapi")
+async def ingest_openapi(
+    project_id: int,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+) -> dict:
+    from app.routers.api_security import ingest_openapi_spec
+    return await ingest_openapi_spec(project_id, file, db)
+
+
 @router.get("/{project_id}/source", response_model=ProjectSourceResponse)
 def get_project_source(project_id: int, db: Session = Depends(get_db)) -> dict:
     project = db.get(Project, project_id)

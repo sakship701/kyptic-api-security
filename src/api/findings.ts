@@ -10,7 +10,7 @@ export interface FindingApiData {
   file_path: string;
   line_number: number | null;
   status: 'open' | 'resolved' | 'false_positive';
-  source: 'sast' | 'dast' | 'greybox' | 'correlation' | 'manual' | 'secrets' | 'sca';
+  source: 'sast' | 'dast' | 'greybox' | 'correlation' | 'manual' | 'secrets' | 'sca' | 'api_security';
   created_at: string;
 
   // SAST Specific Evidence & Metadata
