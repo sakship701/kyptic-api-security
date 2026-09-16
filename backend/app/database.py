@@ -94,6 +94,20 @@ def update_db_schema() -> None:
                 conn.execute(text("ALTER TABLE findings ADD COLUMN resolution_comment TEXT"))
             if "resolved_at" not in columns:
                 conn.execute(text("ALTER TABLE findings ADD COLUMN resolved_at DATETIME"))
+            if "confidence_score" not in columns:
+                conn.execute(text("ALTER TABLE findings ADD COLUMN confidence_score INTEGER NOT NULL DEFAULT 50"))
+            if "confidence_level" not in columns:
+                conn.execute(text("ALTER TABLE findings ADD COLUMN confidence_level VARCHAR(20) NOT NULL DEFAULT 'MEDIUM'"))
+            if "verification_status" not in columns:
+                conn.execute(text("ALTER TABLE findings ADD COLUMN verification_status VARCHAR(50) NOT NULL DEFAULT 'UNVERIFIED'"))
+            if "verification_explanation" not in columns:
+                conn.execute(text("ALTER TABLE findings ADD COLUMN verification_explanation TEXT"))
+            if "evidence_sources" not in columns:
+                conn.execute(text("ALTER TABLE findings ADD COLUMN evidence_sources VARCHAR(500)"))
+            if "correlation_count" not in columns:
+                conn.execute(text("ALTER TABLE findings ADD COLUMN correlation_count INTEGER NOT NULL DEFAULT 0"))
+            if "correlated_finding_ids" not in columns:
+                conn.execute(text("ALTER TABLE findings ADD COLUMN correlated_finding_ids TEXT"))
 
     if "api_endpoints" in inspector.get_table_names():
         columns = [col['name'] for col in inspector.get_columns('api_endpoints')]
@@ -103,4 +117,4 @@ def update_db_schema() -> None:
             if "mass_assignment_status" not in columns:
                 conn.execute(text("ALTER TABLE api_endpoints ADD COLUMN mass_assignment_status VARCHAR(50) NOT NULL DEFAULT 'NONE'"))
             if "dast_status" not in columns:
-                conn.execute(text("ALTER TABLE api_endpoints ADD COLUMN dast_status VARCHAR(50) NOT NULL DEFAULT 'UNTESTED'"))
+                conn.execute(text("ALTER TABLE api_endpoints ADD COLUMN dast_status VARCHAR(50) NOT NULL DEFAULT 'UNTESTED'"))

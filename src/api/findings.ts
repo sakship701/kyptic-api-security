@@ -24,6 +24,15 @@ export interface FindingApiData {
   // Triage & Lifecycle Metadata
   resolution_comment?: string | null;
   resolved_at?: string | null;
+
+  // Phase 2: Cross-Validation & Confidence Metadata
+  confidence_score?: number;
+  confidence_level?: string;
+  verification_status?: string;
+  verification_explanation?: string | null;
+  evidence_sources?: string | null;
+  correlation_count?: number;
+  correlated_finding_ids?: string | null;
 }
 
 export interface FindingSummaryApiData {

@@ -65,7 +65,7 @@ export const FindingsList: React.FC = () => {
       cwe: finding.source === 'sca' ? (finding.rule_id || 'SCA Vulnerability') : finding.cwe || 'Security Finding',
       owasp: finding.source === 'sca' ? 'Dependency Vulnerability' : finding.owasp || finding.category,
       cvss: finding.cvss ?? 0,
-      confidence: 100,
+      confidence: finding.confidence_score ?? 100,
       status: finding.status === 'open' ? 'Open' : finding.status === 'resolved' ? 'Resolved' : 'False Positive',
       aiValidated: finding.source === 'correlation',
       exploitable: finding.severity === 'critical',
@@ -107,7 +107,7 @@ export const FindingsList: React.FC = () => {
   // Filter & Search Logic
   const filteredFindings = findingsData.filter((item) => {
     // Search filter
-    const matchesSearch = 
+    const matchesSearch =
       item.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
       item.component.toLowerCase().includes(searchQuery.toLowerCase()) ||
       item.cwe.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -120,7 +120,7 @@ export const FindingsList: React.FC = () => {
     const matchesOwasp = owaspFilter === 'All Categories' || item.owasp.startsWith(owaspFilter.split(':')[0]);
 
     // Validation Status Filter
-    const matchesStatus = 
+    const matchesStatus =
       statusFilter === 'All' ||
       (statusFilter === 'Confirmed' && item.status === 'Open') ||
       (statusFilter === 'Investigating' && item.status === 'False Positive');
@@ -130,7 +130,7 @@ export const FindingsList: React.FC = () => {
 
   return (
     <div className="p-4 md:p-container-padding max-w-[1600px] mx-auto w-full text-on-surface">
-      
+
       {/* Page Header */}
       <div className="flex flex-col lg:flex-row lg:items-end justify-between gap-4 mb-stack-lg">
         <div>
@@ -142,13 +142,13 @@ export const FindingsList: React.FC = () => {
           </p>
         </div>
         <div className="flex gap-3">
-          <button 
+          <button
             onClick={() => alert('Exporting findings report...')}
             className="px-4 py-2 rounded border border-[#1F242D] text-on-surface font-label-mono text-[12px] uppercase tracking-wider hover:bg-surface-container transition-colors flex items-center gap-2 cursor-pointer bg-transparent"
           >
             <span className="material-symbols-outlined text-[18px]">download</span> Export Report
           </button>
-          <button 
+          <button
             onClick={() => navigate('/copilot')}
             className="px-4 py-2 rounded bg-gradient-to-r from-[#2E90FA] to-[#005fb0] text-white font-label-mono text-[12px] uppercase tracking-wider hover:shadow-[0_0_15px_rgba(46,144,250,0.4)] transition-all flex items-center gap-2 cursor-pointer border-none"
           >
@@ -159,7 +159,7 @@ export const FindingsList: React.FC = () => {
 
       {/* Top Summary Cards Row */}
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4 mb-stack-lg">
-        
+
         {/* Score */}
         <GlassPanel className="rounded-lg p-4 flex flex-col justify-between relative overflow-hidden group">
           <div className="absolute inset-0 bg-primary/5 opacity-0 group-hover:opacity-100 transition-opacity"></div>
@@ -242,20 +242,20 @@ export const FindingsList: React.FC = () => {
 
       {/* Complex Layout: Left Filters + Center Table + Right Sidebar */}
       <div className="flex flex-col xl:flex-row gap-gutter">
-        
+
         {/* Left Sidebar: Filters */}
         <div className="w-full xl:w-64 shrink-0 flex flex-col gap-4">
           <GlassPanel className="rounded-lg p-4">
             <div className="flex items-center justify-between border-b border-outline-variant/30 pb-3 mb-4">
               <span className="font-label-mono text-[12px] uppercase tracking-widest text-on-surface font-semibold">Filters</span>
-              <button 
+              <button
                 onClick={handleResetFilters}
                 className="text-primary text-xs hover:underline cursor-pointer bg-transparent border-none"
               >
                 Reset
               </button>
             </div>
-            
+
             <div className="space-y-6">
               {/* Search Box on Filter bar for responsive support */}
               <div className="block sm:hidden">
@@ -295,7 +295,7 @@ export const FindingsList: React.FC = () => {
               {/* OWASP Top 10 */}
               <div>
                 <label className="text-on-surface-variant text-xs mb-2 block uppercase tracking-wider font-label-mono">OWASP Category</label>
-                <select 
+                <select
                   className="w-full bg-surface-container-high border-outline-variant/50 rounded text-sm text-on-surface py-1.5 focus:border-primary focus:ring-1 focus:ring-primary cursor-pointer"
                   value={owaspFilter}
                   onChange={(e) => setOwaspFilter(e.target.value)}
@@ -313,21 +313,21 @@ export const FindingsList: React.FC = () => {
               <div>
                 <label className="text-on-surface-variant text-xs mb-2 block uppercase tracking-wider font-label-mono">Validation Status</label>
                 <div className="flex flex-wrap gap-2">
-                  <span 
+                  <span
                     onClick={() => setStatusFilter(statusFilter === 'Confirmed' ? 'All' : 'Confirmed')}
                     className={`px-2 py-1 rounded text-xs cursor-pointer border transition-colors ${
-                      statusFilter === 'Confirmed' 
-                        ? 'bg-primary/20 text-primary border-primary/30 font-bold' 
+                      statusFilter === 'Confirmed'
+                        ? 'bg-primary/20 text-primary border-primary/30 font-bold'
                         : 'bg-surface-container text-on-surface-variant border-outline-variant/30 hover:bg-surface-variant'
                     }`}
                   >
                     Confirmed
                   </span>
-                  <span 
+                  <span
                     onClick={() => setStatusFilter(statusFilter === 'Investigating' ? 'All' : 'Investigating')}
                     className={`px-2 py-1 rounded text-xs cursor-pointer border transition-colors ${
-                      statusFilter === 'Investigating' 
-                        ? 'bg-primary/20 text-primary border-primary/30 font-bold' 
+                      statusFilter === 'Investigating'
+                        ? 'bg-primary/20 text-primary border-primary/30 font-bold'
                         : 'bg-surface-container text-on-surface-variant border-outline-variant/30 hover:bg-surface-variant'
                     }`}
                   >
@@ -405,8 +405,8 @@ export const FindingsList: React.FC = () => {
                     }
 
                     return (
-                      <tr 
-                        key={item.id} 
+                      <tr
+                        key={item.id}
                         onClick={() => navigate(`/findings/${item.id}`)}
                         className={`table-row-hover transition-colors group cursor-pointer ${
                           item.exploitable ? 'bg-[#ff4d4d]/[0.02]' : ''
@@ -451,10 +451,10 @@ export const FindingsList: React.FC = () => {
                         <td className="py-3 px-4 align-top pt-4">
                           <span className="flex items-center gap-1.5 text-xs text-on-surface">
                             <span className={`w-2 h-2 rounded-full ${
-                              item.status === 'Open' 
-                                ? 'bg-error animate-pulse' 
-                                : item.status === 'False Positive' 
-                                  ? 'bg-[#ff9800]' 
+                              item.status === 'Open'
+                                ? 'bg-error animate-pulse'
+                                : item.status === 'False Positive'
+                                  ? 'bg-[#ff9800]'
                                   : 'bg-[#4CAF50]'
                             }`}></span>
                             <span>{item.status}</span>
@@ -494,7 +494,7 @@ export const FindingsList: React.FC = () => {
         {/* Right Sidebar: AI Assessment Summary */}
         <div className="w-full xl:w-80 shrink-0">
           <GlassPanel className="rounded-lg overflow-hidden border border-primary/20 relative">
-            
+
             {/* AI Header Graphic */}
             <div className="h-24 bg-gradient-to-br from-primary/20 to-transparent relative border-b border-primary/20 shimmer">
               <div className="absolute inset-0 flex items-center px-4">
@@ -511,7 +511,7 @@ export const FindingsList: React.FC = () => {
             </div>
 
             <div className="p-4 space-y-6">
-              
+
               {/* Most Exploitable */}
               <div>
                 <h5 className="text-xs font-label-mono uppercase tracking-widest text-error mb-3 flex items-center gap-2">
@@ -523,7 +523,7 @@ export const FindingsList: React.FC = () => {
                   <p className="text-xs text-on-surface-variant mb-2 line-clamp-2 leading-relaxed">
                     Kyptic AI verified a publicly available exploit chain that allows unauthenticated remote code execution on the main application server.
                   </p>
-                  <button 
+                  <button
                     onClick={() => navigate('/findings/finding-2')}
                     className="text-xs text-primary hover:underline font-medium cursor-pointer bg-transparent border-none"
                   >
@@ -580,7 +580,7 @@ export const FindingsList: React.FC = () => {
               </div>
 
               {/* Generate Secure Patches Action Button */}
-              <button 
+              <button
                 onClick={() => alert('Generating secure patch playbooks...')}
                 className="w-full bg-primary/10 border border-primary/30 text-primary py-2.5 rounded font-label-mono text-[11px] uppercase tracking-wider hover:bg-primary/20 hover:text-white transition-all flex items-center justify-center gap-2 cursor-pointer"
               >

@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -47,3 +48,39 @@ class FindingResponse(BaseModel):
     # Triage & Lifecycle Metadata
     resolution_comment: str | None = None
     resolved_at: datetime | None = None
+
+    # Phase 2: Cross-Validation & Confidence Metadata
+    confidence_score: int = 50
+    confidence_level: str = "MEDIUM"
+    verification_status: str = "UNVERIFIED"
+    verification_explanation: str | None = None
+    evidence_sources: str | None = None
+    correlation_count: int = 0
+    correlated_finding_ids: str | None = None
+
+    @field_validator("confidence_score", mode="before")
+    @classmethod
+    def default_confidence_score(cls, v: Any) -> int:
+        return 50 if v is None else v
+
+    @field_validator("confidence_level", mode="before")
+    @classmethod
+    def default_confidence_level(cls, v: Any) -> str:
+        return "MEDIUM" if v is None else v
+
+    @field_validator("verification_status", mode="before")
+    @classmethod
+    def default_verification_status(cls, v: Any) -> str:
+        return "UNVERIFIED" if v is None else v
+
+    @field_validator("correlation_count", mode="before")
+    @classmethod
+    def default_correlation_count(cls, v: Any) -> int:
+        return 0 if v is None else v
+
+    @field_validator("verification_explanation", mode="before")
+    @classmethod
+    def default_verification_explanation(cls, v: Any) -> str | None:
+        if v is None:
+            return "Legacy record (no cross-validation metadata calculated)."
+        return v

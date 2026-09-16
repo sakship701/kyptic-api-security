@@ -146,6 +146,12 @@ class ReportService:
                 "line_number": f.line_number,
                 "rule_id": f.rule_id,
                 "code_snippet": f.code_snippet,
+                "confidence_score": getattr(f, "confidence_score", 50),
+                "confidence_level": getattr(f, "confidence_level", "MEDIUM"),
+                "verification_status": getattr(f, "verification_status", "UNVERIFIED"),
+                "verification_explanation": getattr(f, "verification_explanation", None),
+                "evidence_sources": getattr(f, "evidence_sources", None),
+                "correlation_count": getattr(f, "correlation_count", 0),
             })
 
         # Fetch API Endpoints for API Security Section
@@ -220,7 +226,7 @@ class ReportService:
             src = html.escape(f["source"]).upper()
             path = html.escape(f["file_path"])
             snippet = html.escape(f["code_snippet"] or "No snippet available")
-            
+
             sev_color = "#ef4444" if sev == "CRITICAL" else "#f97316" if sev == "HIGH" else "#eab308" if sev == "MEDIUM" else "#3b82f6"
 
             findings_html += f"""
@@ -393,7 +399,7 @@ class ReportService:
         # Severity Overview Table
         story.append(Paragraph("Executive Summary & Risk Metrics", section_style))
         counts = data["metrics"]["severity_counts"]
-        
+
         metrics_table_data = [
             ["Critical", "High", "Medium", "Low / Info", "Total Findings"],
             [

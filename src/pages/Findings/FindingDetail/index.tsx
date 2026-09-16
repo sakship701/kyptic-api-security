@@ -43,7 +43,7 @@ export const FindingDetail: React.FC = () => {
   const [apiFinding, setApiFinding] = useState<DetailData | null>(null);
   const [loading, setLoading] = useState(Boolean(id && /^\d+$/.test(id)));
   const [loadError, setLoadError] = useState<string | null>(null);
-  
+
   // Custom status state & Triage controls
   const [statusState, setStatusState] = useState<'Open' | 'Resolved' | 'False Positive'>('Open');
   const [statusInitialized, setStatusInitialized] = useState(false);
@@ -269,7 +269,7 @@ curl -H "Authorization: Bearer eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJ1c2VyIjoiY
           title: finding.title,
           severity,
           cvss: finding.cvss ?? 0,
-          confidence: 100,
+          confidence: finding.confidence_score ?? 100,
           status,
           owasp: finding.source === 'sca' ? 'Dependency Vulnerability' : (finding.owasp || finding.category),
           cwe: finding.cwe || (finding.source === 'sca' ? (finding.rule_id || 'SCA-VULN') : 'CWE-000'),
@@ -279,11 +279,11 @@ curl -H "Authorization: Bearer eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJ1c2VyIjoiY
           endpoint: sourceLabel,
           file: finding.file_path,
           description: finding.description + scannerInfo,
-          rootCause: finding.source === 'sca' 
+          rootCause: finding.source === 'sca'
             ? `Software Composition Analysis (SCA) detected an unsafe dependency declaration in ${finding.file_path}. Update the package to the fixed version recommended.`
             : finding.rule_id ? `Rule / Advisory ID: ${finding.rule_id}` : 'Security finding detected during scan.',
           vulnerableCode: finding.code_snippet || `${finding.file_path}:${finding.line_number ?? 'n/a'}\nNo source code snippet available.`,
-          correctCode: finding.source === 'sca' 
+          correctCode: finding.source === 'sca'
             ? `Update dependency in ${finding.file_path} to secure version.`
             : 'Remediation details will be supplied by a future security engine.',
           startLine: finding.line_number ?? 1,
@@ -323,7 +323,7 @@ curl -H "Authorization: Bearer eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJ1c2VyIjoiY
     return (
       <div className="p-8 text-on-surface text-center">
         <h2 className="text-xl font-bold text-error">{loadError || 'Vulnerability Not Found'}</h2>
-        <button 
+        <button
           onClick={() => navigate('/findings')}
           className="mt-4 px-4 py-2 bg-primary text-on-primary rounded cursor-pointer border-none"
         >
@@ -379,7 +379,7 @@ curl -H "Authorization: Bearer eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJ1c2VyIjoiY
 
   return (
     <div className="p-4 md:p-container-padding max-w-[1600px] mx-auto w-full flex flex-col gap-stack-lg pb-24 text-on-surface relative">
-      
+
       {/* Triage Comment Modal */}
       {isTriageModalOpen && (
         <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4">
@@ -423,7 +423,7 @@ curl -H "Authorization: Bearer eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJ1c2VyIjoiY
       <header className="flex flex-col md:flex-row md:items-start justify-between gap-4">
         <div>
           <div className="flex items-center gap-2 text-on-surface-variant mb-2 text-xs">
-            <button 
+            <button
               onClick={() => navigate('/findings')}
               className="hover:text-primary transition-colors flex items-center gap-1 bg-transparent border-none cursor-pointer text-xs"
             >
@@ -435,7 +435,7 @@ curl -H "Authorization: Bearer eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJ1c2VyIjoiY
           <h1 className="font-display-lg-mobile md:font-display-lg text-display-lg-mobile md:text-display-lg font-bold text-on-surface mb-3 tracking-tight">
             {currentFinding.title}
           </h1>
-          
+
           <div className="flex flex-wrap items-center gap-3">
             {currentFinding.sourceLabel && (
               <span className="px-2.5 py-1 rounded font-mono font-bold text-xs tracking-wider bg-primary/10 border border-primary/30 text-primary uppercase">
@@ -450,12 +450,12 @@ curl -H "Authorization: Bearer eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJ1c2VyIjoiY
             </span>
 
             {/* Validation status badge */}
-            <span 
+            <span
               className={`px-2.5 py-1 rounded border text-sm font-bold flex items-center gap-1 ${
-                statusState === 'Open' 
-                  ? 'bg-error/10 border-error/30 text-error' 
-                  : statusState === 'False Positive' 
-                    ? 'bg-[#ff9800]/10 border-[#ff9800]/30 text-[#ff9800]' 
+                statusState === 'Open'
+                  ? 'bg-error/10 border-error/30 text-error'
+                  : statusState === 'False Positive'
+                    ? 'bg-[#ff9800]/10 border-[#ff9800]/30 text-[#ff9800]'
                     : 'bg-[#4CAF50]/10 border-[#4CAF50]/30 text-[#4CAF50]'
               }`}
             >
@@ -464,9 +464,9 @@ curl -H "Authorization: Bearer eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJ1c2VyIjoiY
               </span>
               {statusState}
             </span>
-            
+
             <div className="h-4 w-px bg-outline-variant mx-1"></div>
-            
+
             <span className="text-sm text-on-surface-variant flex items-center gap-1">
               <span className="material-symbols-outlined" style={{ fontSize: '16px' }}>psychology</span>
               Confidence: {currentFinding.confidence}%
@@ -496,14 +496,14 @@ curl -H "Authorization: Bearer eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJ1c2VyIjoiY
 
           {statusState === 'Open' ? (
             <>
-              <button 
+              <button
                 onClick={() => handleOpenTriageModal('resolved')}
                 className="px-3 py-2 rounded-lg bg-[#4CAF50]/20 text-[#4CAF50] border border-[#4CAF50]/40 hover:bg-[#4CAF50]/30 transition-all font-semibold flex items-center gap-1 text-xs cursor-pointer"
               >
                 <span className="material-symbols-outlined text-[16px]">check_circle</span>
                 Mark Resolved
               </button>
-              <button 
+              <button
                 onClick={() => handleOpenTriageModal('false_positive')}
                 className="px-3 py-2 rounded-lg bg-[#ff9800]/20 text-[#ff9800] border border-[#ff9800]/40 hover:bg-[#ff9800]/30 transition-all font-semibold flex items-center gap-1 text-xs cursor-pointer"
               >
@@ -512,7 +512,7 @@ curl -H "Authorization: Bearer eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJ1c2VyIjoiY
               </button>
             </>
           ) : (
-            <button 
+            <button
               onClick={() => handleOpenTriageModal('open')}
               className="px-3 py-2 rounded-lg bg-surface-container text-on-surface border border-outline-variant hover:bg-surface-container-high transition-all font-semibold flex items-center gap-1 text-xs cursor-pointer"
             >
@@ -521,7 +521,7 @@ curl -H "Authorization: Bearer eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJ1c2VyIjoiY
             </button>
           )}
 
-          <button 
+          <button
             onClick={handleGeneratePatch}
             className="px-3 py-2 rounded-lg bg-primary-container text-on-primary-container hover:brightness-110 transition-all font-semibold flex items-center gap-1 text-xs shadow-lg shadow-primary-container/20 cursor-pointer border-none"
           >
@@ -533,7 +533,7 @@ curl -H "Authorization: Bearer eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJ1c2VyIjoiY
 
       {/* Top Summary Row */}
       <section className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-gutter">
-        
+
         {/* CVSS Score */}
         <GlassPanel className="p-5 rounded-xl flex items-center justify-between">
           <div>
@@ -592,12 +592,12 @@ curl -H "Authorization: Bearer eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJ1c2VyIjoiY
 
       {/* Main Grid Layout */}
       <section className="grid grid-cols-1 lg:grid-cols-12 gap-gutter items-start">
-        
+
         {/* Left Panel: Technical Evidence */}
         <div className="lg:col-span-7 flex flex-col gap-stack-md">
           <GlassPanel className="rounded-xl overflow-hidden">
             <div className="border-b border-[#1F242D] px-5 py-3 flex gap-6 bg-surface-container-low/50">
-              <button 
+              <button
                 onClick={() => setActiveTab('Description')}
                 className={`font-medium pb-3 -mb-3 px-1 transition-colors cursor-pointer bg-transparent border-none ${
                   activeTab === 'Description' ? 'text-primary border-b-2 border-primary' : 'text-on-surface-variant hover:text-on-surface'
@@ -606,7 +606,7 @@ curl -H "Authorization: Bearer eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJ1c2VyIjoiY
                 Description
               </button>
               {!isSAST && (
-                <button 
+                <button
                   onClick={() => setActiveTab('HTTP')}
                   className={`font-medium pb-3 -mb-3 px-1 transition-colors cursor-pointer bg-transparent border-none ${
                     activeTab === 'HTTP' ? 'text-primary border-b-2 border-primary' : 'text-on-surface-variant hover:text-on-surface'
@@ -616,7 +616,7 @@ curl -H "Authorization: Bearer eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJ1c2VyIjoiY
                 </button>
               )}
               {!isSAST && (
-                <button 
+                <button
                   onClick={() => setActiveTab('PoC')}
                   className={`font-medium pb-3 -mb-3 px-1 transition-colors cursor-pointer bg-transparent border-none ${
                     activeTab === 'PoC' ? 'text-primary border-b-2 border-primary' : 'text-on-surface-variant hover:text-on-surface'
@@ -628,7 +628,7 @@ curl -H "Authorization: Bearer eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJ1c2VyIjoiY
             </div>
 
             <div className="p-5 space-y-6">
-              
+
               {activeTab === 'Description' && (
                 <>
                   {/* Tab 1 Description content */}
@@ -646,21 +646,21 @@ curl -H "Authorization: Bearer eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJ1c2VyIjoiY
                   {/* Code Snippet block */}
                   <div>
                     <h3 className="text-sm font-semibold text-on-surface mb-2 flex items-center gap-2">
-                      <span className="material-symbols-outlined" style={{ fontSize: '18px' }}>code</span> 
+                      <span className="material-symbols-outlined" style={{ fontSize: '18px' }}>code</span>
                       {patchGenerated ? 'Remediated Code (AI Patched)' : 'Vulnerable Code'}
                     </h3>
-                    
+
                     <div className="code-block rounded-lg overflow-hidden font-code-sm text-code-sm">
                       <div className="bg-surface-container-low px-4 py-2 border-b border-[#1F242D] flex justify-between items-center text-on-surface-variant text-xs">
                         <span>{currentFinding.file}</span>
-                        <button 
+                        <button
                           onClick={() => alert('Code copied to clipboard!')}
                           className="hover:text-primary cursor-pointer bg-transparent border-none"
                         >
                           <span className="material-symbols-outlined" style={{ fontSize: '16px' }}>content_copy</span>
                         </button>
                       </div>
-                      
+
                       <div className="p-4 text-on-surface-variant overflow-x-auto whitespace-pre font-mono text-xs leading-relaxed bg-[#0A0D12]">
                         {patchGenerated ? (
                           currentFinding.correctCode
@@ -669,7 +669,7 @@ curl -H "Authorization: Bearer eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJ1c2VyIjoiY
                           currentFinding.vulnerableCode.split('\n').map((line, index) => {
                             const currentLineNum = currentFinding.startLine + index;
                             const isHighlighted = currentFinding.highlightedLines.includes(currentLineNum);
- 
+
                             let lineContent = line;
                             const pipeIndex = line.indexOf('|');
                             if (pipeIndex !== -1) {
@@ -680,8 +680,8 @@ curl -H "Authorization: Bearer eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJ1c2VyIjoiY
                             }
 
                             return (
-                              <div 
-                                key={index} 
+                              <div
+                                key={index}
                                 className={`-mx-4 px-4 ${isHighlighted ? 'bg-error-container/10 border-l-2 border-error text-on-surface' : ''}`}
                               >
                                 <span className="text-outline select-none inline-block w-8 text-right pr-2 font-mono">
@@ -725,7 +725,7 @@ curl -H "Authorization: Bearer eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJ1c2VyIjoiY
 
         {/* Right Panel: Validation Timeline & AI Copilot */}
         <div className="lg:col-span-5 flex flex-col gap-stack-md">
-          
+
           {/* AI Security Copilot Panel */}
           <GlassPanel className="rounded-xl overflow-hidden relative border-primary/30 shadow-[0_0_30px_rgba(49,146,252,0.1)]">
             <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-primary-container to-tertiary-container shimmer"></div>
@@ -764,21 +764,21 @@ curl -H "Authorization: Bearer eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJ1c2VyIjoiY
 
               <div className="flex flex-col gap-3">
                 {!patchGenerated && (
-                  <button 
+                  <button
                     onClick={handleGeneratePatch}
                     disabled={generatingPatch}
                     className="w-full py-2.5 rounded-lg bg-primary-container text-on-primary-container font-semibold hover:brightness-110 transition-all flex items-center justify-center gap-2 shadow-lg shadow-primary-container/20 cursor-pointer border-none disabled:opacity-50"
                   >
-                    <span className="material-symbols-outlined text-[18px]">auto_fix_high</span> 
+                    <span className="material-symbols-outlined text-[18px]">auto_fix_high</span>
                     {generatingPatch ? 'Generating...' : 'Generate Secure Patch'}
                   </button>
                 )}
-                
-                <button 
+
+                <button
                   onClick={() => navigate('/copilot', { state: { finding: currentFinding } })}
                   className="w-full py-2.5 rounded-lg border border-outline-variant text-on-surface hover:bg-surface-container-high transition-colors font-medium flex items-center justify-center gap-2 cursor-pointer bg-transparent"
                 >
-                  <span className="material-symbols-outlined text-[18px]">chat</span> 
+                  <span className="material-symbols-outlined text-[18px]">chat</span>
                   Explain Attack Scenario
                 </button>
               </div>
@@ -790,20 +790,20 @@ curl -H "Authorization: Bearer eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJ1c2VyIjoiY
                 </div>
                 <div>
                   <p className="text-xs text-on-surface-variant mb-1">CWE ID</p>
-                  <a 
+                  <a
                     className="text-sm font-medium text-primary hover:underline flex items-center gap-1"
                     href={`https://cwe.mitre.org/data/definitions/${currentFinding.cwe.split('-')[1]}.html`}
-                    target="_blank" 
+                    target="_blank"
                     rel="noopener noreferrer"
                   >
-                    {currentFinding.cwe} 
+                    {currentFinding.cwe}
                     <span className="material-symbols-outlined text-xs">open_in_new</span>
                   </a>
                 </div>
                 <div>
                   <p className="text-xs text-on-surface-variant mb-1">Estimated Fix Time</p>
                   <p className="text-sm font-medium text-on-surface flex items-center gap-1">
-                    <span className="material-symbols-outlined text-xs text-secondary">timer</span> 
+                    <span className="material-symbols-outlined text-xs text-secondary">timer</span>
                     {currentFinding.remediationTime}
                   </p>
                 </div>

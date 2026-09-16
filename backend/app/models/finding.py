@@ -72,3 +72,12 @@ class Finding(Base):
     # Triage & Lifecycle Metadata
     resolution_comment: Mapped[str | None] = mapped_column(Text, nullable=True)
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+    # Phase 2: Cross-Validation & Confidence Metadata
+    confidence_score: Mapped[int] = mapped_column(Integer, nullable=False, default=50)
+    confidence_level: Mapped[str] = mapped_column(String(20), nullable=False, default="MEDIUM")
+    verification_status: Mapped[str] = mapped_column(String(50), nullable=False, default="UNVERIFIED")
+    verification_explanation: Mapped[str | None] = mapped_column(Text, nullable=True)
+    evidence_sources: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    correlation_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    correlated_finding_ids: Mapped[str | None] = mapped_column(Text, nullable=True)

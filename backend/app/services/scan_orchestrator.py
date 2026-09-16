@@ -11,6 +11,7 @@ from app.models.finding import Finding, FindingSeverity, FindingSource, FindingS
 from app.models.project import Project
 from app.models.scan import Scan, ScanStatus
 from app.services.api_security_scanner import run_static_api_analysis
+from app.services.cross_validation_engine import CrossValidationEngine
 from app.services.dast_probes import run_active_dast_probes
 from app.services.dast_scanner import DASTStatus, DASTWebScanner
 from app.services.detect_secrets_scanner import DetectSecretsScanner
@@ -310,6 +311,22 @@ class ScanOrchestrator:
                 f.status = prev_f.status
                 f.resolution_comment = prev_f.resolution_comment
                 f.resolved_at = prev_f.resolved_at
+
+        # =====================================================================
+        # STAGE 4.5: Cross-Validation & Deterministic Confidence Assessment
+        # =====================================================================
+        scan.current_phase = "Cross-validating findings & assessing confidence"
+        scan.progress = 90
+        self.db.commit()
+
+        cv_engine = CrossValidationEngine(db=self.db)
+        cv_engine.process_findings(
+            project_id=project.id,
+            scan_id=self.scan_id,
+            findings=unique_findings,
+            dast_status=dast_status or scan.dast_status,
+            sca_status=sca_status or scan.sca_status,
+        )
 
         # =====================================================================
         # STAGE 5: Saving & Finalizing Scan State
