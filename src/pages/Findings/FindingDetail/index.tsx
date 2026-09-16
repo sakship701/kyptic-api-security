@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import GlassPanel from '../../../components/ui/GlassPanel';
 import { fetchFinding, updateFindingStatus, verifyFinding } from '../../../api/findings';
+import { sendCopilotChat } from '../../../api/copilot';
 
 interface DetailData {
   title: string;
@@ -335,7 +336,20 @@ curl -H "Authorization: Bearer eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJ1c2VyIjoiY
 
   const handleGeneratePatch = async () => {
     setGeneratingPatch(true);
-    await new Promise((resolve) => setTimeout(resolve, 1500));
+    if (id && /^\d+$/.test(id)) {
+      try {
+        const res = await sendCopilotChat("How do I fix this? Generate a secure patch.", Number(id));
+        if (res.code_block && res.code_block.code) {
+          if (apiFinding) {
+            setApiFinding({ ...apiFinding, correctCode: res.code_block.code });
+          }
+        }
+      } catch (e) {
+        // Fallback or static code logic remains active
+      }
+    } else {
+      await new Promise((resolve) => setTimeout(resolve, 800));
+    }
     setGeneratingPatch(false);
     setPatchGenerated(true);
   };
