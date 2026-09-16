@@ -12,7 +12,7 @@ from app.schemas.targeted_verification import (
     TargetedVerificationResult,
     TargetedVerificationStatus,
 )
-from app.security.base_verifier import BaseVulnerabilityVerifier
+from app.security.verifiers.browser_verifiers import DomXssVerifier
 from app.security.verifiers.sqli_verifier import SqlInjectionVerifier
 from app.security.verifiers.web_verifiers import (
     CommandInjectionVerifier,
@@ -66,6 +66,7 @@ class TargetedVerificationEngine:
             "PATH_TRAVERSAL": PathTraversalVerifier(),
             "CORS_MISCONFIG": CorsVerifier(),
             "SECURITY_HEADERS": SecurityHeadersVerifier(),
+            "DOM_XSS": DomXssVerifier(),
         }
 
     def verify_finding(self, project_id: int, finding_id: int) -> TargetedVerificationResult:

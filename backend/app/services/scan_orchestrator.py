@@ -203,6 +203,29 @@ class ScanOrchestrator:
                 except Exception as dast_err:
                     dast_status = DASTStatus.SCANNER_ERROR
                     scan.dast_status = dast_status
+
+                # 2b. Browser DAST Crawl & DOM Audit (Playwright)
+                try:
+                    from app.services.browser_dast_service import BrowserDastService
+                    from app.services.dast_http_client import DastAuthContext
+
+                    browser_service = BrowserDastService()
+                    auth_ctx = DastAuthContext(
+                        auth_type=project.api_auth_type or "NONE",
+                        header_name=project.api_auth_header_name or "Authorization",
+                    )
+                    b_res = await browser_service.run_browser_dast(
+                        target_url=target_url,
+                        project_id=project.id,
+                        scan_id=self.scan_id,
+                        auth_context=auth_ctx,
+                    )
+                    if b_res and b_res.findings:
+                        combined_findings.extend(b_res.findings)
+                        executed_scanners.append("kyptic-browser-dast")
+                        scanner_versions.append("kyptic-browser-dast 1.0.0")
+                except Exception:
+                    pass
             elif project.source_type == "WEBSITE" and not target_url:
                 scan.status = ScanStatus.FAILED
                 scan.error_message = "Website projects are DAST targets; target URL is missing."

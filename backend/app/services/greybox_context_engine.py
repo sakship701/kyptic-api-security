@@ -123,6 +123,8 @@ def map_vulnerability_to_probes(vuln_family: str) -> Tuple[List[str], str]:
         return (["COMMAND_INJECTION"], "Targeted Command Injection probe scheduled to verify expression execution.")
     elif vuln_family == "XSS":
         return (["XSS"], "Targeted XSS probe scheduled to verify executable tag reflection.")
+    elif vuln_family == "DOM_XSS":
+        return (["DOM_XSS"], "Targeted DOM XSS Playwright browser execution probe scheduled.")
     elif vuln_family == "CSRF":
         return (["CSRF"], "Targeted CSRF probe scheduled to verify cross-origin state modification.")
     elif vuln_family == "PATH_TRAVERSAL":
