@@ -206,7 +206,7 @@ class TestScanApiSecurityIntegration(unittest.TestCase):
         self.db.add(scan)
         self.db.commit()
 
-        with patch("app.services.scan_service.is_ssrf_safe_url", return_value=(True, "OK")):
+        with patch("app.services.scan_orchestrator.is_ssrf_safe_url", return_value=(True, "OK")):
             asyncio.run(_run_scan(scan.id))
 
         self.db.refresh(scan)
@@ -351,7 +351,7 @@ class TestScanApiSecurityIntegration(unittest.TestCase):
         self.db.add(scan)
         self.db.commit()
 
-        with patch("app.services.scan_service.is_ssrf_safe_url", return_value=(True, "OK")):
+        with patch("app.services.scan_orchestrator.is_ssrf_safe_url", return_value=(True, "OK")):
             asyncio.run(_run_scan(scan.id))
 
         self.db.refresh(scan)
@@ -404,7 +404,7 @@ class TestScanApiSecurityIntegration(unittest.TestCase):
         self.db.add(scan)
         self.db.commit()
 
-        with patch("app.services.scan_service.is_ssrf_safe_url", return_value=(True, "OK")):
+        with patch("app.services.scan_orchestrator.is_ssrf_safe_url", return_value=(True, "OK")):
             asyncio.run(_run_scan(scan.id))
 
         findings = self.db.query(Finding).filter(Finding.scan_id == scan.id).all()
