@@ -149,9 +149,11 @@ def test_07_08_09_10_vulnerability_to_probe_mappings(db_session):
 
 
 def test_11_12_13_unsupported_vulnerability_probes(db_session):
-    """11. SQLi -> no probe. 12. XSS -> no probe. 13. Secrets -> no probe."""
-    assert map_vulnerability_to_probes("SQL_INJECTION")[0] == []
-    assert map_vulnerability_to_probes("XSS")[0] == []
+    """Verify probe mapping for supported Phase 5 expansion vs un-probed static findings."""
+    assert map_vulnerability_to_probes("SQL_INJECTION")[0] == ["SQL_INJECTION"]
+    assert map_vulnerability_to_probes("XSS")[0] == ["XSS"]
+    assert map_vulnerability_to_probes("SSRF")[0] == []
+    assert map_vulnerability_to_probes("XXE")[0] == []
     assert map_vulnerability_to_probes("SECRETS")[0] == []
     assert map_vulnerability_to_probes("SCA")[0] == []
 

@@ -703,8 +703,31 @@ def run_active_dast_probes(
             return None
         executed_probe_keys.add(key)
 
+        from app.security.verifiers.sqli_verifier import SqlInjectionVerifier
+        from app.security.verifiers.web_verifiers import (
+            CommandInjectionVerifier,
+            XssVerifier,
+            CsrfVerifier,
+            PathTraversalVerifier,
+            CorsVerifier,
+            SecurityHeadersVerifier,
+        )
+
+        verifiers_map = {
+            "SQL_INJECTION": SqlInjectionVerifier(),
+            "COMMAND_INJECTION": CommandInjectionVerifier(),
+            "XSS": XssVerifier(),
+            "CSRF": CsrfVerifier(),
+            "PATH_TRAVERSAL": PathTraversalVerifier(),
+            "CORS_MISCONFIG": CorsVerifier(),
+            "SECURITY_HEADERS": SecurityHeadersVerifier(),
+        }
+
         try:
-            if probe_type_str == "AUTH_ENFORCEMENT" or probe_type_str == DastProbeType.AUTH_ENFORCEMENT.value:
+            if probe_type_str in verifiers_map:
+                v = verifiers_map[probe_type_str]
+                return v.verify(endpoint=ep, client=client, base_url=target_url, auth_context=auth_ctx)
+            elif probe_type_str == "AUTH_ENFORCEMENT" or probe_type_str == DastProbeType.AUTH_ENFORCEMENT.value:
                 return probe_engine.probe_auth_enforcement(ep)
             elif probe_type_str == "BOLA" or probe_type_str == DastProbeType.BOLA.value:
                 return probe_engine.probe_bola(ep)

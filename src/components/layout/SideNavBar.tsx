@@ -10,6 +10,8 @@ export const SideNavBar: React.FC = () => {
     { name: 'Dashboard', path: '/dashboard', icon: 'dashboard' },
     { name: 'Projects', path: '/projects', icon: 'inventory_2' },
     { name: 'API Security', path: '/api-security', icon: 'api' },
+    { name: 'Targeted Verification', path: '/targeted-verification', icon: 'bolt' },
+    { name: 'Vulnerability Coverage', path: '/vulnerability-coverage', icon: 'fact_check' },
     { name: 'New Scan', path: '/scans', icon: 'rocket_launch' },
     { name: 'Risk Map', path: '/risk-map', icon: 'hub' },
     { name: 'Vulnerabilities', path: '/findings', icon: 'security' },

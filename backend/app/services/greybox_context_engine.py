@@ -117,7 +117,21 @@ def map_vulnerability_to_probes(vuln_family: str) -> Tuple[List[str], str]:
         return (["MASS_ASSIGNMENT"], "Targeted Mass Assignment active probe scheduled to verify property binding controls.")
     elif vuln_family == "RATE_LIMITING":
         return (["RATE_LIMITING"], "Targeted Rate Limiting active probe scheduled to check request throttling.")
-    elif vuln_family in {"SQL_INJECTION", "XSS", "SSRF", "COMMAND_INJECTION"}:
+    elif vuln_family == "SQL_INJECTION":
+        return (["SQL_INJECTION"], "Targeted SQL Injection probe scheduled to verify boolean differential & error syntax.")
+    elif vuln_family == "COMMAND_INJECTION":
+        return (["COMMAND_INJECTION"], "Targeted Command Injection probe scheduled to verify expression execution.")
+    elif vuln_family == "XSS":
+        return (["XSS"], "Targeted XSS probe scheduled to verify executable tag reflection.")
+    elif vuln_family == "CSRF":
+        return (["CSRF"], "Targeted CSRF probe scheduled to verify cross-origin state modification.")
+    elif vuln_family == "PATH_TRAVERSAL":
+        return (["PATH_TRAVERSAL"], "Targeted Path Traversal probe scheduled to verify file normalization controls.")
+    elif vuln_family == "CORS_MISCONFIG":
+        return (["CORS_MISCONFIG"], "Targeted CORS probe scheduled to verify origin reflection & credential policies.")
+    elif vuln_family == "SECURITY_HEADERS":
+        return (["SECURITY_HEADERS"], "Targeted Security Headers probe scheduled to analyze HTTP response headers.")
+    elif vuln_family in {"SSRF", "XXE", "JWT", "SESSION"}:
         return ([], f"No compatible active DAST probe is currently available for vulnerability type {vuln_family}.")
     elif vuln_family in {"SECRETS", "SCA"}:
         return ([], f"Active API probing is not applicable for {vuln_family} static findings.")

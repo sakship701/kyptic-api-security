@@ -17,6 +17,8 @@ import ApiSecurityDashboard from './pages/ApiSecurity/ApiSecurityDashboard';
 import Reports from './pages/Reports';
 import Settings from './pages/Settings';
 import UIKit from './pages/UIKit';
+import TargetedVerificationPage from './pages/TargetedVerification';
+import VulnerabilityCoveragePage from './pages/VulnerabilityCoverage';
 
 
 const App: React.FC = () => {
@@ -37,6 +39,8 @@ const App: React.FC = () => {
             <Route path="findings" element={<FindingsList />} />
             <Route path="findings/:id" element={<FindingDetail />} />
             <Route path="api-security" element={<ApiSecurityDashboard />} />
+            <Route path="targeted-verification" element={<TargetedVerificationPage />} />
+            <Route path="vulnerability-coverage" element={<VulnerabilityCoveragePage />} />
             <Route path="copilot" element={<Copilot />} />
             <Route path="risk-map" element={<RiskMap />} />
             <Route path="reports" element={<Reports />} />

@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import GlassPanel from '../../../components/ui/GlassPanel';
-import { fetchFinding, updateFindingStatus } from '../../../api/findings';
+import { fetchFinding, updateFindingStatus, verifyFinding } from '../../../api/findings';
 
 interface DetailData {
   title: string;
@@ -518,6 +518,23 @@ curl -H "Authorization: Bearer eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJ1c2VyIjoiY
             >
               <span className="material-symbols-outlined text-[16px]">lock_reset</span>
               Reopen Finding
+            </button>
+          )}
+
+          {currentFinding.projectId && id && /^\d+$/.test(id) && (
+            <button
+              onClick={async () => {
+                try {
+                  const res = await verifyFinding(currentFinding.projectId!, id);
+                  alert(`Targeted Verification Result:\nStatus: ${res.status}\nExplanation: ${res.explanation}`);
+                } catch (e: any) {
+                  alert(`Verification failed: ${e.message}`);
+                }
+              }}
+              className="px-3 py-2 rounded-lg bg-tertiary-container text-on-tertiary-container hover:brightness-110 transition-all font-semibold flex items-center gap-1 text-xs cursor-pointer border-none"
+            >
+              <span className="material-symbols-outlined text-[16px]">bolt</span>
+              Verify Vulnerability
             </button>
           )}
 

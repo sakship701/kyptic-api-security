@@ -103,3 +103,27 @@ export const fetchGlobalFindingsSummary = () =>
 
 export const fetchProjectFindingsSummary = (projectId: number | string) =>
   request<FindingSummaryApiData>(`/api/projects/${projectId}/findings/summary`);
+
+export interface TargetedVerificationResultApiData {
+  finding_id?: number | null;
+  project_id?: number | null;
+  endpoint_id?: number | null;
+  target_url: string;
+  http_method: string;
+  path: string;
+  vulnerability_id: string;
+  vulnerability_family: string;
+  probe_type?: string | null;
+  status: 'CONFIRMED' | 'NOT_CONFIRMED' | 'INCONCLUSIVE' | 'NOT_SUPPORTED';
+  explanation: string;
+  evidence?: string | null;
+  requests_attempted: number;
+  responses_observed: any[];
+  safe_to_execute: boolean;
+  execution_metadata: Record<string, any>;
+}
+
+export const verifyFinding = (projectId: number | string, findingId: number | string) =>
+  request<TargetedVerificationResultApiData>(`/api/projects/${projectId}/findings/${findingId}/verify`, {
+    method: 'POST',
+  });
