@@ -10,6 +10,8 @@ def normalize_endpoint_path(path: str) -> Tuple[str, str]:
     Examples:
         "GET /users/{userId}" -> ("GET", "/users/{param}")
         "POST /api/v1/billing/123" -> ("POST", "/api/v1/billing/{param}")
+        "API:GET:/api/v1/users/{id}" -> ("GET", "/api/v1/users/{param}")
+        "GET:/api/v1/users/{id}" -> ("GET", "/api/v1/users/{param}")
         "/api/v1/users" -> ("ALL", "/api/v1/users")
         "controllers/authController.js" -> ("FILE", "controllers/authController.js")
     """
@@ -17,13 +19,21 @@ def normalize_endpoint_path(path: str) -> Tuple[str, str]:
         return ("ALL", "")
 
     s = path.strip()
+    if s.startswith("API:"):
+        s = s[4:].strip()
+
     method = "ALL"
 
-    # Extract leading HTTP method if present
-    parts = s.split(" ", 1)
-    if len(parts) == 2 and parts[0].upper() in {"GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"}:
-        method = parts[0].upper()
-        s = parts[1].strip()
+    valid_methods = {"GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"}
+    parts_space = s.split(" ", 1)
+    parts_colon = s.split(":", 1)
+
+    if len(parts_space) == 2 and parts_space[0].upper() in valid_methods:
+        method = parts_space[0].upper()
+        s = parts_space[1].strip()
+    elif len(parts_colon) == 2 and parts_colon[0].upper() in valid_methods:
+        method = parts_colon[0].upper()
+        s = parts_colon[1].strip()
 
     # Parameterize dynamic path segments like IDs or UUIDs
     path_segments = s.split("/")

@@ -13,6 +13,7 @@ from app.models.scan import Scan, ScanStatus
 from app.services.api_security_scanner import run_static_api_analysis
 from app.services.cross_validation_engine import CrossValidationEngine
 from app.services.dast_probes import run_active_dast_probes
+from app.services.greybox_context_engine import GreyBoxContextEngine
 from app.services.dast_scanner import DASTStatus, DASTWebScanner
 from app.services.detect_secrets_scanner import DetectSecretsScanner
 from app.services.finding_normalizer import (
@@ -241,11 +242,28 @@ class ScanOrchestrator:
                         return
                     created_endpoints = []
 
-                # Dynamic API DAST Probes
+                # Dynamic API DAST Probes with Grey-Box Schedule Guidance
                 api_target = project.api_target_url or project.target_url
                 if project.api_dast_enabled and api_target:
                     is_safe, ssrf_msg = is_ssrf_safe_url(api_target, allow_localhost=False)
                     if is_safe:
+                        scan.current_phase = "Mapping Grey-Box context & prioritizing probes"
+                        scan.progress = 70
+                        self.db.commit()
+
+                        greybox_contexts = []
+                        try:
+                            gb_engine = GreyBoxContextEngine(db=self.db)
+                            greybox_contexts = gb_engine.build_context(
+                                project_id=project.id,
+                                scan_id=self.scan_id,
+                                static_findings=combined_findings,
+                                endpoints=created_endpoints,
+                                target_url=api_target,
+                            )
+                        except Exception:
+                            greybox_contexts = []
+
                         scan.current_phase = "Running Dynamic DAST Probes"
                         scan.progress = 75
                         scan.dast_status = "RUNNING"
@@ -263,6 +281,7 @@ class ScanOrchestrator:
                                 project=project,
                                 scan_id=self.scan_id,
                                 endpoints=created_endpoints,
+                                greybox_contexts=greybox_contexts,
                                 existing_findings_map=existing_map,
                                 progress_callback=dast_progress_cb,
                             )

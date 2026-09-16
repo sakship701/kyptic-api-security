@@ -666,12 +666,14 @@ def run_active_dast_probes(
     project: Project,
     scan_id: int,
     endpoints: List[ApiEndpoint],
+    greybox_contexts: Optional[List[Any]] = None,
     existing_findings_map: Optional[Dict[str, Finding]] = None,
     progress_callback: Optional[Any] = None,
 ) -> List[Finding]:
     """
     Executes active DAST probes against project endpoints using safety controls.
-    Updates endpoint dast_status in place and returns new DAST findings.
+    Consumes prioritized Grey-Box execution schedule when available to target high-priority endpoints,
+    prevents duplicate probe executions, updates endpoint dast_status in place, and returns new DAST findings.
     """
     target_url = project.api_target_url
     if not target_url or not project.api_dast_enabled:
@@ -690,52 +692,90 @@ def run_active_dast_probes(
 
     new_findings: List[Finding] = []
     total_ep_count = len(endpoints)
+    endpoint_map = {ep.id: ep for ep in endpoints}
 
+    # Set to prevent duplicate probe execution on the same (endpoint_id, probe_type)
+    executed_probe_keys: Set[Tuple[int, str]] = set()
+
+    def run_probe_for_type(ep: ApiEndpoint, probe_type_str: str) -> Optional[DastProbeResult]:
+        key = (ep.id, probe_type_str)
+        if key in executed_probe_keys:
+            return None
+        executed_probe_keys.add(key)
+
+        try:
+            if probe_type_str == "AUTH_ENFORCEMENT" or probe_type_str == DastProbeType.AUTH_ENFORCEMENT.value:
+                return probe_engine.probe_auth_enforcement(ep)
+            elif probe_type_str == "BOLA" or probe_type_str == DastProbeType.BOLA.value:
+                return probe_engine.probe_bola(ep)
+            elif probe_type_str == "MASS_ASSIGNMENT" or probe_type_str == DastProbeType.MASS_ASSIGNMENT.value:
+                return probe_engine.probe_mass_assignment(ep)
+            elif probe_type_str == "RATE_LIMITING" or probe_type_str == DastProbeType.RATE_LIMITING.value:
+                return probe_engine.probe_rate_limiting(ep)
+        except Exception as err:
+            return DastProbeResult(
+                endpoint_id=ep.id,
+                probe_type=DastProbeType.AUTH_ENFORCEMENT,
+                status=DastVerificationStatus.INCONCLUSIVE,
+                evidence=f"Endpoint probing interrupted: {redact_secrets(str(err))}",
+            )
+        return None
+
+    # Step 1: Execute Grey-Box Prioritized Probe Schedule
+    if greybox_contexts:
+        for idx, ctx in enumerate(greybox_contexts):
+            ep_id = getattr(ctx, "endpoint_id", None)
+            if not ep_id or ep_id not in endpoint_map:
+                continue
+
+            ep = endpoint_map[ep_id]
+            probe_types = getattr(ctx, "recommended_probe_types", [])
+            for pt in probe_types:
+                res = run_probe_for_type(ep, pt)
+                if res and res.status == DastVerificationStatus.VERIFIED_VULNERABLE:
+                    finding = map_probe_result_to_finding(
+                        project_id=project.id,
+                        scan_id=scan_id,
+                        endpoint=ep,
+                        probe_result=res,
+                        existing_findings_map=existing_findings_map,
+                    )
+                    if finding:
+                        new_findings.append(finding)
+
+    # Step 2: Execute remaining baseline probes per endpoint to ensure full coverage
     for idx, ep in enumerate(endpoints):
         probe_results = []
-        try:
-            probe_results = [
-                probe_engine.probe_auth_enforcement(ep),
-                probe_engine.probe_bola(ep),
-                probe_engine.probe_mass_assignment(ep),
-                probe_engine.probe_rate_limiting(ep),
-            ]
-        except Exception as ep_err:
-            probe_results = [
-                DastProbeResult(
-                    endpoint_id=ep.id,
-                    probe_type=DastProbeType.AUTH_ENFORCEMENT,
-                    status=DastVerificationStatus.INCONCLUSIVE,
-                    evidence=f"Endpoint probing interrupted: {redact_secrets(str(ep_err))}",
-                )
-            ]
+        for ptype in [DastProbeType.AUTH_ENFORCEMENT.value, DastProbeType.BOLA.value, DastProbeType.MASS_ASSIGNMENT.value, DastProbeType.RATE_LIMITING.value]:
+            res = run_probe_for_type(ep, ptype)
+            if res:
+                probe_results.append(res)
+                if res.status == DastVerificationStatus.VERIFIED_VULNERABLE:
+                    finding = map_probe_result_to_finding(
+                        project_id=project.id,
+                        scan_id=scan_id,
+                        endpoint=ep,
+                        probe_result=res,
+                        existing_findings_map=existing_findings_map,
+                    )
+                    if finding:
+                        new_findings.append(finding)
 
-        has_vuln = any(pr.status == DastVerificationStatus.VERIFIED_VULNERABLE for pr in probe_results)
-        has_inconclusive = any(pr.status == DastVerificationStatus.INCONCLUSIVE for pr in probe_results)
-        has_secure = any(pr.status == DastVerificationStatus.VERIFIED_SECURE for pr in probe_results)
+        if probe_results:
+            has_vuln = any(pr.status == DastVerificationStatus.VERIFIED_VULNERABLE for pr in probe_results)
+            has_inconclusive = any(pr.status == DastVerificationStatus.INCONCLUSIVE for pr in probe_results)
+            has_secure = any(pr.status == DastVerificationStatus.VERIFIED_SECURE for pr in probe_results)
 
-        if has_vuln:
-            ep.dast_status = "VERIFIED_VULNERABLE"
-        elif has_inconclusive:
-            ep.dast_status = "INCONCLUSIVE"
-        elif has_secure:
-            ep.dast_status = "VERIFIED_SECURE"
-        else:
-            ep.dast_status = "UNTESTED"
+            if has_vuln:
+                ep.dast_status = "VERIFIED_VULNERABLE"
+            elif has_inconclusive:
+                ep.dast_status = "INCONCLUSIVE"
+            elif has_secure:
+                ep.dast_status = "VERIFIED_SECURE"
+            else:
+                ep.dast_status = "UNTESTED"
 
-        ep.updated_at = datetime.utcnow()
-
-        for pr in probe_results:
-            if pr.status == DastVerificationStatus.VERIFIED_VULNERABLE:
-                finding = map_probe_result_to_finding(
-                    project_id=project.id,
-                    scan_id=scan_id,
-                    endpoint=ep,
-                    probe_result=pr,
-                    existing_findings_map=existing_findings_map,
-                )
-                if finding:
-                    new_findings.append(finding)
+            ep.updated_at = datetime.utcnow()
 
         if progress_callback:
             progress_callback(idx + 1, total_ep_count)

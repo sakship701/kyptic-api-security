@@ -1,6 +1,7 @@
 import time
 from datetime import datetime
 from pathlib import Path
+from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
@@ -25,6 +26,9 @@ from app.services.storage_service import get_project_dir
 from app.services.ssrf_protection import is_ssrf_safe_url
 from app.services.dast_http_client import DastHttpClient, DastAuthContext, redact_secrets, DastError
 from app.services.dast_probes import DastProbeEngine, DastVerificationStatus, map_probe_result_to_finding, run_active_dast_probes
+
+from app.schemas.greybox import GreyBoxContextResponse
+from app.services.greybox_context_engine import GreyBoxContextEngine
 
 router = APIRouter(prefix="/api", tags=["api-security"])
 
@@ -593,3 +597,30 @@ def get_api_security_summary(
         "last_dast_scan_status": last_dast_scan.status.value if (last_dast_scan and last_dast_scan.status) else None,
         "last_dast_scan_at": (last_dast_scan.completed_at or last_dast_scan.started_at) if last_dast_scan else None,
     }
+
+
+@router.get(
+    "/projects/{project_id}/greybox-context",
+    response_model=List[GreyBoxContextResponse],
+)
+def get_project_greybox_context(
+    project_id: int,
+    db: Session = Depends(get_db),
+) -> List[dict]:
+    project = db.get(Project, project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    findings = list(db.scalars(select(Finding).where(Finding.project_id == project_id)).all())
+    endpoints = list(db.scalars(select(ApiEndpoint).where(ApiEndpoint.project_id == project_id)).all())
+
+    engine = GreyBoxContextEngine(db=db)
+    contexts = engine.build_context(
+        project_id=project_id,
+        scan_id=0,
+        static_findings=findings,
+        endpoints=endpoints,
+        target_url=project.api_target_url or project.target_url,
+    )
+
+    return [ctx.to_dict() for ctx in contexts]
