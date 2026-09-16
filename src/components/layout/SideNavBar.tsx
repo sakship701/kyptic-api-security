@@ -14,6 +14,7 @@ export const SideNavBar: React.FC = () => {
     { name: 'Vulnerability Coverage', path: '/vulnerability-coverage', icon: 'fact_check' },
     { name: 'New Scan', path: '/scans', icon: 'rocket_launch' },
     { name: 'Risk Map', path: '/risk-map', icon: 'hub' },
+    { name: 'Compliance', path: '/compliance', icon: 'verified_user' },
     { name: 'Vulnerabilities', path: '/findings', icon: 'security' },
     { name: 'AI Security Copilot', path: '/copilot', icon: 'psychology' },
     { name: 'Reports', path: '/reports', icon: 'assessment' },

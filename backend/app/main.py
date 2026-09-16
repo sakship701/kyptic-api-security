@@ -10,6 +10,8 @@ from app.routers.reports import router as reports_router
 from app.routers.api_security import router as api_security_router
 from app.routers.targeted_verification import router as targeted_verification_router
 from app.routers.copilot import router as copilot_router
+from app.routers.risk_map import router as risk_map_router
+from app.routers.compliance import router as compliance_router
 from app.services.scan_service import resume_pending_scans
 
 
@@ -34,6 +36,8 @@ app.include_router(reports_router, prefix="/api")
 app.include_router(api_security_router)
 app.include_router(targeted_verification_router)
 app.include_router(copilot_router)
+app.include_router(risk_map_router)
+app.include_router(compliance_router)
 
 
 

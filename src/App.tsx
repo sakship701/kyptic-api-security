@@ -19,6 +19,7 @@ import Settings from './pages/Settings';
 import UIKit from './pages/UIKit';
 import TargetedVerificationPage from './pages/TargetedVerification';
 import VulnerabilityCoveragePage from './pages/VulnerabilityCoverage';
+import CompliancePage from './pages/Compliance';
 
 
 const App: React.FC = () => {
@@ -41,6 +42,7 @@ const App: React.FC = () => {
             <Route path="api-security" element={<ApiSecurityDashboard />} />
             <Route path="targeted-verification" element={<TargetedVerificationPage />} />
             <Route path="vulnerability-coverage" element={<VulnerabilityCoveragePage />} />
+            <Route path="compliance" element={<CompliancePage />} />
             <Route path="copilot" element={<Copilot />} />
             <Route path="risk-map" element={<RiskMap />} />
             <Route path="reports" element={<Reports />} />

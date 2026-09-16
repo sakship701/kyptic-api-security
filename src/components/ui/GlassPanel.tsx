@@ -4,12 +4,14 @@ interface GlassPanelProps {
   children: React.ReactNode;
   className?: string;
   variant?: 'low' | 'high' | 'border-error';
+  onClick?: (e: React.MouseEvent<HTMLDivElement>) => void;
 }
 
 export const GlassPanel: React.FC<GlassPanelProps> = ({
   children,
   className = '',
   variant = 'low',
+  onClick,
 }) => {
   const variantClasses = {
     low: 'glass-panel',
@@ -18,7 +20,7 @@ export const GlassPanel: React.FC<GlassPanelProps> = ({
   };
 
   return (
-    <div className={`${variantClasses[variant]} ${className}`}>
+    <div onClick={onClick} className={`${variantClasses[variant]} ${className}`}>
       {children}
     </div>
   );
