@@ -15,6 +15,8 @@ export const TargetedVerificationPage: React.FC = () => {
   const [httpMethod, setHttpMethod] = useState('GET');
   const [path, setPath] = useState('/api/v1/users/{id}');
   const [selectedVulnId, setSelectedVulnId] = useState('BOLA');
+  const [parameter, setParameter] = useState('');
+  const [testValue, setTestValue] = useState('');
 
   const [authType, setAuthType] = useState('NONE');
   const [authHeaderName, setAuthHeaderName] = useState('Authorization');
@@ -38,9 +40,24 @@ export const TargetedVerificationPage: React.FC = () => {
 
   const handleVerify = async (e: React.FormEvent) => {
     e.preventDefault();
-    setExecuting(true);
     setErrorMsg(null);
     setResult(null);
+
+    const trimmedParam = parameter.trim();
+    const trimmedTestVal = testValue.trim();
+
+    if (selectedVulnId === 'SQL_INJECTION') {
+      if (!trimmedParam) {
+        setErrorMsg('Injectable parameter is required for SQL Injection verification.');
+        return;
+      }
+      if (/[\/\?#&]/.test(trimmedParam)) {
+        setErrorMsg('Parameter name must be a valid field name without URL special characters.');
+        return;
+      }
+    }
+
+    setExecuting(true);
 
     try {
       const res = await runStandaloneTargetedVerification({
@@ -48,6 +65,8 @@ export const TargetedVerificationPage: React.FC = () => {
         http_method: httpMethod,
         path: path,
         vulnerability_id: selectedVulnId,
+        parameter: trimmedParam || undefined,
+        test_value: trimmedTestVal || undefined,
         auth_type: authType,
         auth_header_name: authHeaderName,
         auth_token: authToken || undefined,
@@ -143,6 +162,34 @@ export const TargetedVerificationPage: React.FC = () => {
                   ))}
                 </select>
               </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-on-surface-variant uppercase tracking-wider mb-1">
+                  Injectable Parameter {selectedVulnId === 'SQL_INJECTION' && <span className="text-error">*</span>}
+                </label>
+                <input
+                  type="text"
+                  value={parameter}
+                  onChange={(e) => setParameter(e.target.value)}
+                  placeholder={selectedVulnId === 'SQL_INJECTION' ? 'q (e.g. search query parameter)' : 'id (optional)'}
+                  className="w-full px-3 py-2 bg-surface-container-high border border-outline-variant rounded-lg text-on-surface font-mono text-sm focus:outline-none focus:border-primary"
+                />
+              </div>
+
+              {selectedVulnId === 'SQL_INJECTION' && (
+                <div>
+                  <label className="block text-xs font-semibold text-on-surface-variant uppercase tracking-wider mb-1">
+                    Test Value / Seed Value (Optional)
+                  </label>
+                  <input
+                    type="text"
+                    value={testValue}
+                    onChange={(e) => setTestValue(e.target.value)}
+                    placeholder="admin (e.g. known record search term)"
+                    className="w-full px-3 py-2 bg-surface-container-high border border-outline-variant rounded-lg text-on-surface font-mono text-sm focus:outline-none focus:border-primary"
+                  />
+                </div>
+              )}
 
               {selectedDef && (
                 <div className="p-3 rounded-lg bg-surface-container-high border border-outline-variant text-xs space-y-1">

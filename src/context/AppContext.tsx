@@ -1,4 +1,5 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
+import { getCurrentUser, loginUser, logoutUser, registerUser, type User } from '../api/auth';
 import { createProject as createProjectApi, fetchProjects, type ProjectApiData } from '../api/projects';
 import { createScan, fetchScan, fetchScans, pauseScan as pauseScanApi, resumeScan as resumeScanApi, stopScan as stopScanApi, type ScanApiData, type ScanStatus } from '../api/scans';
 
@@ -7,11 +8,13 @@ export interface ProjectData {
   name: string;
   technology: string;
   repository: string;
-  score: number;
+  score: number | null;
   critical: number;
   high: number;
   medium: number;
   low: number;
+  totalFindings?: number;
+  hasData?: boolean;
   lastScan: string;
   status: 'Protected' | 'Scanning' | 'Needs Attention';
   sourceType?: string | null;
@@ -22,22 +25,40 @@ export interface ProjectData {
 
 const mapProject = (project: ProjectApiData): ProjectData => {
   const normalizedStatus = project.status.toLowerCase();
-  const status: ProjectData['status'] = normalizedStatus.includes('scan')
-    ? 'Scanning'
-    : normalizedStatus.includes('attention') || normalizedStatus.includes('vulnerable')
-      ? 'Needs Attention'
-      : 'Protected';
+  const critical = project.critical ?? 0;
+  const high = project.high ?? 0;
+  const medium = project.medium ?? 0;
+  const low = project.low ?? 0;
+  const score = project.score ?? null;
+  const hasData = project.has_data ?? ((project.total_findings ?? 0) > 0);
+
+  let status: ProjectData['status'] = 'Protected';
+  if (normalizedStatus.includes('scan')) {
+    status = 'Scanning';
+  } else if (
+    normalizedStatus.includes('attention') ||
+    normalizedStatus.includes('vulnerable') ||
+    critical > 0 ||
+    high > 0 ||
+    (score !== null && score < 60)
+  ) {
+    status = 'Needs Attention';
+  } else {
+    status = 'Protected';
+  }
 
   return {
     id: String(project.id),
     name: project.name,
     technology: project.technology || 'Unknown technology',
     repository: project.repository_url || 'No repository connected',
-    score: status === 'Needs Attention' ? 45 : status === 'Scanning' ? 75 : 98,
-    critical: 0,
-    high: 0,
-    medium: 0,
-    low: 0,
+    score,
+    critical,
+    high,
+    medium,
+    low,
+    totalFindings: project.total_findings ?? 0,
+    hasData,
     lastScan: project.created_at ? new Date(project.created_at).toLocaleDateString() : 'Not scanned',
     status,
     sourceType: project.source_type,
@@ -48,6 +69,7 @@ const mapProject = (project: ProjectApiData): ProjectData => {
 };
 
 interface AppContextType {
+  user: User | null;
   orgName: string;
   setOrgName: (name: string) => void;
   activeProjectId: string;
@@ -59,7 +81,9 @@ interface AppContextType {
   refreshProjects: () => Promise<void>;
   createProject: (project: Parameters<typeof createProjectApi>[0]) => Promise<ProjectData>;
   isAuthenticated: boolean;
-  login: (email: string) => Promise<boolean>;
+  authLoading: boolean;
+  login: (email: string, password: string) => Promise<boolean>;
+  register: (email: string, password: string, fullName?: string) => Promise<boolean>;
   logout: () => void;
   activeScanId: number | null;
   scanError: string | null;
@@ -76,14 +100,14 @@ interface AppContextType {
 const AppContext = createContext<AppContextType | undefined>(undefined);
 
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const [user, setUser] = useState<User | null>(null);
+  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
+  const [authLoading, setAuthLoading] = useState<boolean>(true);
+
   const [orgName, setOrgName] = useState('Global Sec Ops');
   const [activeProjectId, setActiveProjectId] = useState('');
-  const [isAuthenticated, setIsAuthenticated] = useState(() => {
-    return localStorage.getItem('kyptic_auth') === 'true';
-  });
-
   const [projects, setProjects] = useState<ProjectData[]>([]);
-  const [projectsLoading, setProjectsLoading] = useState(true);
+  const [projectsLoading, setProjectsLoading] = useState(false);
   const [projectsError, setProjectsError] = useState<string | null>(null);
   const [activeScanId, setActiveScanId] = useState<number | null>(null);
   const [scanProgress, setScanProgress] = useState(0);
@@ -108,16 +132,50 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
+  // Bootstrap active authentication session on startup
+  useEffect(() => {
+    let isMounted = true;
+    const checkAuth = async () => {
+      try {
+        const currentUser = await getCurrentUser();
+        if (isMounted) {
+          setUser(currentUser);
+          setIsAuthenticated(true);
+        }
+      } catch {
+        if (isMounted) {
+          setUser(null);
+          setIsAuthenticated(false);
+        }
+      } finally {
+        if (isMounted) {
+          setAuthLoading(false);
+        }
+      }
+    };
+
+    void checkAuth();
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  // When authenticated, load projects
+  useEffect(() => {
+    if (isAuthenticated) {
+      void refreshProjects();
+    } else {
+      setProjects([]);
+      setActiveProjectId('');
+    }
+  }, [isAuthenticated]);
+
   const createProject = async (project: Parameters<typeof createProjectApi>[0]) => {
     const createdProject = mapProject(await createProjectApi(project));
     setProjects((currentProjects) => [...currentProjects, createdProject]);
     setActiveProjectId(createdProject.id);
     return createdProject;
   };
-
-  useEffect(() => {
-    void refreshProjects();
-  }, []);
 
   const applyScan = (scan: ScanApiData | null) => {
     setActiveScanId(scan?.id ?? null);
@@ -142,10 +200,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   useEffect(() => {
+    if (!isAuthenticated) return;
     void fetchScans()
       .then((scans) => applyScan(scans[0] || null))
       .catch((error: unknown) => setScanError(error instanceof Error ? error.message : 'Unable to load scan state.'));
-  }, []);
+  }, [isAuthenticated]);
 
   useEffect(() => {
     if (activeScanId === null || !['queued', 'running'].includes(scanStatus)) {
@@ -161,17 +220,26 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const isScanning = scanStatus === 'running' || scanStatus === 'queued';
 
-  const login = async (_email: string) => {
-    // Simple mock authentication delay
-    await new Promise((r) => setTimeout(r, 600));
+  const login = async (email: string, password: string): Promise<boolean> => {
+    const tokenResp = await loginUser(email, password);
+    setUser(tokenResp.user);
     setIsAuthenticated(true);
-    localStorage.setItem('kyptic_auth', 'true');
+    return true;
+  };
+
+  const register = async (email: string, password: string, fullName?: string): Promise<boolean> => {
+    const tokenResp = await registerUser(email, password, fullName);
+    setUser(tokenResp.user);
+    setIsAuthenticated(true);
     return true;
   };
 
   const logout = () => {
+    void logoutUser();
+    setUser(null);
     setIsAuthenticated(false);
-    localStorage.removeItem('kyptic_auth');
+    setProjects([]);
+    setActiveProjectId('');
   };
 
   const startScan = async (projectId: string) => {
@@ -223,6 +291,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   return (
     <AppContext.Provider
       value={{
+        user,
         orgName,
         setOrgName,
         activeProjectId,
@@ -234,7 +303,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         refreshProjects,
         createProject,
         isAuthenticated,
+        authLoading,
         login,
+        register,
         logout,
         activeScanId,
         scanError,

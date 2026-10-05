@@ -8,7 +8,7 @@ interface DetailData {
   title: string;
   vulnId: string;
   severity: 'Critical' | 'High' | 'Medium' | 'Low';
-  cvss: number;
+  cvss: number | null;
   confidence: number;
   status: 'Open' | 'Resolved' | 'False Positive';
   owasp: string;
@@ -32,6 +32,8 @@ interface DetailData {
   sourceLabel?: string;
   projectId?: number;
   endpointPath?: string | null;
+  verificationStatus?: string;
+  createdAt?: string;
 }
 
 export const FindingDetail: React.FC = () => {
@@ -53,199 +55,7 @@ export const FindingDetail: React.FC = () => {
   const [triageComment, setTriageComment] = useState('');
   const [triageSubmitting, setTriageSubmitting] = useState(false);
 
-  // Findings detailed database mapping
-  const detailsDb: Record<string, DetailData> = {
-    'finding-1': {
-      vulnId: 'Vuln-4921',
-      title: 'SQL Injection (Blind)',
-      severity: 'Critical',
-      cvss: 9.8,
-      confidence: 99,
-      status: 'Open',
-      owasp: 'A03:2021-Injection',
-      cwe: 'CWE-89',
-      remediationTime: '45 Mins',
-      impact: 'High',
-      exploitability: 'Easy',
-      endpoint: 'POST /api/v2/users/query',
-      file: 'controllers/authController.js',
-      description: 'The authentication module fails to properly sanitize user input in the username field before constructing a SQL query. This allows an attacker to inject arbitrary SQL commands, potentially bypassing authentication entirely or extracting sensitive data from the user database.',
-      rootCause: 'String concatenation is used to build the SQL query dynamically instead of utilizing parameterized queries or an ORM that handles escaping automatically.',
-      vulnerableCode: `40 |   const { username, password } = req.body;
-41 |
-42 |   const query = \`SELECT * FROM users WHERE username = '\${username}' AND password = '\${password}'\`;
-43 |
-44 |   db.query(query, (err, results) => {
-45 |     if (err) return res.status(500).send("Database error");`,
-      correctCode: `40 |   const { username, password } = req.body;
-41 |
-42 |   const query = 'SELECT * FROM users WHERE username = ? AND password = ?';
-43 |
-44 |   db.query(query, [username, password], (err, results) => {
-45 |     if (err) return res.status(500).send("Database error");`,
-      startLine: 40,
-      highlightedLines: [42],
-      httpEvidence: `POST /api/v2/users/query HTTP/1.1
-Host: api.sentinel.com
-Content-Type: application/json
-
-{
-  "username": "admin' OR '1'='1",
-  "password": "randompassword"
-}
-
-HTTP/1.1 200 OK
-Content-Type: application/json
-{
-  "status": "authenticated",
-  "user": { "id": 1, "username": "admin" }
-}`,
-      pocExploit: `curl -X POST https://api.sentinel.com/v2/users/query \\
-  -H "Content-Type: application/json" \\
-  -d '{"username": "admin\\x27 OR \\x271\\x27=\\x271", "password": "any"}'`
-    },
-    'finding-2': {
-      vulnId: 'Vuln-1082',
-      title: 'Remote Code Execution via Deserialization',
-      severity: 'Critical',
-      cvss: 10.0,
-      confidence: 95,
-      status: 'Open',
-      owasp: 'A08:2021-Software and Data Integrity Failures',
-      cwe: 'CWE-502',
-      remediationTime: '1.5 Hours',
-      impact: 'Critical',
-      exploitability: 'Moderate',
-      endpoint: 'POST /api/v1/parser/import',
-      file: 'core/utils/DataParser.java',
-      description: 'The import feature utilizes unsafe default ObjectInputStream deserialization on client-provided byte arrays, allowing remote code execution if parsed blocks contain payload gadgets.',
-      rootCause: 'ObjectInputStream is instantiated and readObject() invoked directly without blacklists or white-listed target class matching definitions.',
-      vulnerableCode: `50 |   public Object parseData(byte[] serializedBytes) throws Exception {
-51 |     ObjectInputStream ois = new ObjectInputStream(new ByteArrayInputStream(serializedBytes));
-52 |     return ois.readObject(); // Unsafe deserialization of stream
-53 |   }`,
-      correctCode: `50 |   public Object parseData(byte[] serializedBytes) throws Exception {
-51 |     // Use a safe deserializer or JSON mapper with class type checks
-52 |     ObjectMapper mapper = new ObjectMapper();
-53 |     return mapper.readValue(serializedBytes, SecureData.class);
-54 |   }`,
-      startLine: 50,
-      highlightedLines: [52],
-      httpEvidence: `POST /api/v1/parser/import HTTP/1.1
-Host: api.sentinel.com
-Content-Type: application/octet-stream
-
-[Raw Hex Payload: AC ED 00 05 73 72 00 11 6A 61 76 61 2E 75 74 69 6C 2E 48 61 73 68 4D 61 70 ...]
-
-HTTP/1.1 500 Internal Server Error
-[Exploit Callback Detected]`,
-      pocExploit: `# Generate ysoserial gadget payload and transmit
-ysoserial CommonsCollections6 "ping collaborator.com" > payload.bin
-curl -X POST https://api.sentinel.com/v1/parser/import --data-binary @payload.bin`
-    },
-    'finding-3': {
-      vulnId: 'Vuln-3829',
-      title: 'Broken Access Control (IDOR)',
-      severity: 'High',
-      cvss: 7.5,
-      confidence: 88,
-      status: 'Open',
-      owasp: 'A01:2021-Broken Access Control',
-      cwe: 'CWE-284',
-      remediationTime: '30 Mins',
-      impact: 'High',
-      exploitability: 'Easy',
-      endpoint: 'GET /api/v1/billing/{id}',
-      file: 'api.sentinel.com/v1/billing',
-      description: 'The billing route does not verify if the requesting user owns the invoice matching the provided URL parameter id, revealing arbitrary invoices to authenticated users.',
-      rootCause: 'Invoices are queried only by document identifier ID without cross-referencing user context variables in the database lookup.',
-      vulnerableCode: `12 |   const invoiceId = req.params.id;
-13 |   const invoice = await Invoice.findById(invoiceId);
-14 |   return res.json(invoice); // No ownership check`,
-      correctCode: `12 |   const invoiceId = req.params.id;
-13 |   const invoice = await Invoice.findOne({ _id: invoiceId, userId: req.user.id });
-14 |   if (!invoice) return res.status(403).send("Unauthorized Access");
-15 |   return res.json(invoice);`,
-      startLine: 12,
-      highlightedLines: [14],
-      httpEvidence: `GET /api/v1/billing/9982 HTTP/1.1
-Authorization: Bearer <Attacker_Token>
-
-HTTP/1.1 200 OK
-{
-  "id": 9982,
-  "userId": 4202, /* Different User ID */
-  "amount": 25000.00
-}`,
-      pocExploit: `curl -H "Authorization: Bearer <Attacker_Token>" \\
-  https://api.sentinel.com/v1/billing/9982`
-    },
-    'finding-4': {
-      vulnId: 'Vuln-8910',
-      title: 'Hardcoded AWS Access Key',
-      severity: 'High',
-      cvss: 7.2,
-      confidence: 100,
-      status: 'False Positive',
-      owasp: 'A07:2021-Identification and Authentication Failures',
-      cwe: 'CWE-798',
-      remediationTime: '15 Mins',
-      impact: 'High',
-      exploitability: 'Easy',
-      endpoint: 'config/deployment.yaml',
-      file: 'config/deployment.yaml',
-      description: 'Hardcoded AWS Access Key IDs and Secrets are embedded within the deployment configuration, exposing account authorization parameters to read repository users.',
-      rootCause: 'Credentials are hardcoded in plaintext rather than referencing environment variable definitions or vaults.',
-      vulnerableCode: `15 |   AWS_ACCESS_KEY_ID: "AKIAIOSFODNN7EXAMPLE"
-16 |   AWS_SECRET_ACCESS_KEY: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"`,
-      correctCode: `15 |   AWS_ACCESS_KEY_ID: "\${AWS_ACCESS_KEY_ID}"
-16 |   AWS_SECRET_ACCESS_KEY: "\${AWS_SECRET_ACCESS_KEY}"`,
-      startLine: 15,
-      highlightedLines: [15, 16],
-      httpEvidence: `Static secret detection match in repository config:
-Matched Pattern: AKIA[0-9A-Z]{16}
-File: config/deployment.yaml`,
-      pocExploit: `# Utilize awscli to confirm key is active
-export AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE
-export AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY
-aws sts get-caller-identity`
-    },
-    'finding-5': {
-      vulnId: 'Vuln-9982',
-      title: 'JWT Misconfiguration (Weak Algorithm)',
-      severity: 'Medium',
-      cvss: 5.4,
-      confidence: 82,
-      status: 'Resolved',
-      owasp: 'A02:2021-Cryptographic Failures',
-      cwe: 'CWE-327',
-      remediationTime: '15 Mins',
-      impact: 'Medium',
-      exploitability: 'Easy',
-      endpoint: 'auth/TokenService.js',
-      file: 'auth/TokenService.js',
-      description: 'The authentication service signs JSON Web Tokens using the none algorithm value, allowing clients to forge valid authorization parameters.',
-      rootCause: 'The library configuration accepts none values as a valid cryptographic algorithm check.',
-      vulnerableCode: `21 |   const token = jwt.sign(payload, secret, { algorithm: 'none' });`,
-      correctCode: `21 |   const token = jwt.sign(payload, secret, { algorithm: 'HS256' });`,
-      startLine: 21,
-      highlightedLines: [21],
-      httpEvidence: `POST /api/v1/auth/session HTTP/1.1
-Authorization: Bearer eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJ1c2VyIjoiYWRtaW4ifQ.
-
-HTTP/1.1 200 OK
-{
-  "role": "admin"
-}`,
-      pocExploit: `# Craft base64 header indicating algorithm "none"
-# Header: {"alg":"none","typ":"JWT"} -> eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0
-# Payload: {"user":"admin"} -> eyJ1c2VyIjoiYWRtaW4ifQ
-curl -H "Authorization: Bearer eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJ1c2VyIjoiYWRtaW4ifQ." \\
-  https://api.sentinel.com/v1/dashboard`
-    }
-  };
-
-  const legacyFinding = id ? detailsDb[id] : null;
+  const legacyFinding = null;
 
   useEffect(() => {
     if (!id || !/^\d+$/.test(id)) {
@@ -269,7 +79,7 @@ curl -H "Authorization: Bearer eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJ1c2VyIjoiY
           vulnId: finding.rule_id ? finding.rule_id : `Finding-${finding.id}`,
           title: finding.title,
           severity,
-          cvss: finding.cvss ?? 0,
+          cvss: finding.cvss != null ? Number(finding.cvss) : null,
           confidence: finding.confidence_score ?? 100,
           status,
           owasp: finding.source === 'sca' ? 'Dependency Vulnerability' : (finding.owasp || finding.category),
@@ -297,6 +107,8 @@ curl -H "Authorization: Bearer eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJ1c2VyIjoiY
           sourceLabel,
           projectId: finding.project_id,
           endpointPath: (finding.source === 'api_security' || finding.source === 'dast') ? finding.file_path : null,
+          verificationStatus: finding.verification_status || 'UNVERIFIED',
+          createdAt: finding.created_at,
         });
         setStatusState(status);
         setStatusInitialized(true);
@@ -571,7 +383,7 @@ curl -H "Authorization: Bearer eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJ1c2VyIjoiY
             <p className="text-sm text-on-surface-variant mb-1 font-medium">CVSS v3.1 Score</p>
             <div className="flex items-baseline gap-2">
               <span className={`text-4xl font-bold ${isCritical ? 'text-error' : 'text-[#ff9800]'}`}>
-                {currentFinding.cvss}
+                {currentFinding.cvss != null ? currentFinding.cvss : 'N/A'}
               </span>
               <span className={`text-sm uppercase font-bold ${isCritical ? 'text-error' : 'text-[#ff9800]'}`}>
                 {currentFinding.severity}
@@ -580,7 +392,7 @@ curl -H "Authorization: Bearer eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJ1c2VyIjoiY
           </div>
           <div className={`w-16 h-16 rounded-full border-4 flex items-center justify-center relative ${isCritical ? 'border-error text-error' : 'border-[#ff9800] text-[#ff9800]'}`}>
             <span className="material-symbols-outlined absolute opacity-20" style={{ fontSize: '48px' }}>warning</span>
-            <span className="font-bold relative z-10">{currentFinding.cvss}</span>
+            <span className="font-bold relative z-10">{currentFinding.cvss != null ? currentFinding.cvss : 'N/A'}</span>
           </div>
         </GlassPanel>
 
@@ -847,31 +659,24 @@ curl -H "Authorization: Bearer eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJ1c2VyIjoiY
             <h3 className="text-sm font-semibold text-on-surface mb-4">Detection Timeline</h3>
             <div className="relative pl-6 space-y-6 before:absolute before:inset-0 before:ml-[11px] before:-translate-x-px before:h-full before:w-0.5 before:bg-gradient-to-b before:from-transparent before:via-outline-variant/50 before:to-transparent">
               <div className="relative flex items-center gap-4">
-                <div className="absolute left-0 w-3 h-3 rounded-full bg-outline-variant -ml-[19px] border-2 border-background z-20"></div>
+                <div className="absolute left-0 w-3 h-3 rounded-full bg-primary -ml-[19px] border-2 border-background z-20 shadow-[0_0_10px_rgba(166,200,255,0.5)]"></div>
                 <div>
-                  <p className="text-xs text-on-surface-variant">14:22</p>
-                  <p className="text-sm font-medium text-on-surface">White-Box Detection</p>
+                  <p className="text-xs text-on-surface-variant">Engine: {currentFinding.sourceLabel}</p>
+                  <p className="text-sm font-medium text-on-surface">Vulnerability Detected</p>
                 </div>
               </div>
               <div className="relative flex items-center gap-4">
                 <div className="absolute left-0 w-3 h-3 rounded-full bg-primary -ml-[19px] border-2 border-background z-20 shadow-[0_0_10px_rgba(166,200,255,0.5)]"></div>
                 <div>
-                  <p className="text-xs text-on-surface-variant">14:23</p>
-                  <p className="text-sm font-medium text-on-surface">Black-Box Validation</p>
-                </div>
-              </div>
-              <div className="relative flex items-center gap-4">
-                <div className="absolute left-0 w-3 h-3 rounded-full bg-primary -ml-[19px] border-2 border-background z-20 shadow-[0_0_10px_rgba(166,200,255,0.5)]"></div>
-                <div>
-                  <p className="text-xs text-on-surface-variant">14:24</p>
-                  <p className="text-sm font-medium text-on-surface">AI Cross-Validation</p>
+                  <p className="text-xs text-on-surface-variant">Confidence Score: {currentFinding.confidence}%</p>
+                  <p className="text-sm font-medium text-on-surface">Cross-Validation Evaluated</p>
                 </div>
               </div>
               <div className="relative flex items-center gap-4">
                 <div className="absolute left-0 w-3 h-3 rounded-full bg-tertiary -ml-[19px] border-2 border-background z-20 shadow-[0_0_10px_rgba(255,183,130,0.5)]"></div>
                 <div>
-                  <p className="text-xs text-on-surface-variant">14:25</p>
-                  <p className="text-sm font-medium text-tertiary">Report Generated</p>
+                  <p className="text-xs text-on-surface-variant">Verification: {currentFinding.verificationStatus || 'UNVERIFIED'}</p>
+                  <p className="text-sm font-medium text-tertiary">Status: {statusState}</p>
                 </div>
               </div>
             </div>

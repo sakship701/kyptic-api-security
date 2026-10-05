@@ -14,12 +14,13 @@ interface FindingItem {
   sourceType: string;
   cwe: string;
   owasp: string;
-  cvss: number;
+  cvss: number | null;
   confidence: number;
   status: 'Open' | 'Resolved' | 'False Positive';
   aiValidated: boolean;
   exploitable: boolean;
   projectId: number;
+  verificationStatus: string;
 }
 
 export const FindingsList: React.FC = () => {
@@ -64,12 +65,13 @@ export const FindingsList: React.FC = () => {
       sourceType: finding.source,
       cwe: finding.source === 'sca' ? (finding.rule_id || 'SCA Vulnerability') : finding.cwe || 'Security Finding',
       owasp: finding.source === 'sca' ? 'Dependency Vulnerability' : finding.owasp || finding.category,
-      cvss: finding.cvss ?? 0,
+      cvss: finding.cvss != null ? Number(finding.cvss) : null,
       confidence: finding.confidence_score ?? 100,
       status: finding.status === 'open' ? 'Open' : finding.status === 'resolved' ? 'Resolved' : 'False Positive',
       aiValidated: finding.source === 'correlation',
       exploitable: finding.severity === 'critical',
       projectId: finding.project_id,
+      verificationStatus: finding.verification_status || 'UNVERIFIED',
     };
   };
 
@@ -128,6 +130,49 @@ export const FindingsList: React.FC = () => {
     return matchesSearch && matchesSeverity && matchesOwasp && matchesStatus;
   });
 
+  const mostExploitableFinding = React.useMemo(() => {
+    if (!findingsData || findingsData.length === 0) return null;
+    const severityOrder: Record<string, number> = { Critical: 4, High: 3, Medium: 2, Low: 1 };
+    const openFindings = findingsData.filter(f => f.status === 'Open');
+    const pool = openFindings.length > 0 ? openFindings : findingsData;
+    const sorted = [...pool].sort((a, b) => (severityOrder[b.severity] || 0) - (severityOrder[a.severity] || 0));
+    return sorted[0] || null;
+  }, [findingsData]);
+
+  const remediationEffort = React.useMemo(() => {
+    let criticalHours = 0;
+    let highHours = 0;
+    let medLowHours = 0;
+
+    findingsData.forEach(f => {
+      if (f.severity === 'Critical') criticalHours += 2.0;
+      else if (f.severity === 'High') highHours += 1.0;
+      else if (f.severity === 'Medium') medLowHours += 0.5;
+      else medLowHours += 0.25;
+    });
+
+    const totalNum = criticalHours + highHours + medLowHours;
+    const total = totalNum.toFixed(1);
+    const devHours = (totalNum * 0.7).toFixed(1);
+    const devOpsHours = (totalNum * 0.3).toFixed(1);
+
+    const critPct = totalNum > 0 ? Math.round((criticalHours / totalNum) * 100) : 0;
+    const highPct = totalNum > 0 ? Math.round((highHours / totalNum) * 100) : 0;
+    const medLowPct = totalNum > 0 ? Math.max(0, 100 - critPct - highPct) : 0;
+
+    return { total, devHours, devOpsHours, critPct, highPct, medLowPct };
+  }, [findingsData]);
+
+  const topPriorityFindings = React.useMemo(() => {
+    if (!findingsData || findingsData.length === 0) return [];
+    const severityOrder: Record<string, number> = { Critical: 4, High: 3, Medium: 2, Low: 1 };
+    const openFindings = findingsData.filter(f => f.status === 'Open');
+    const pool = openFindings.length > 0 ? openFindings : findingsData;
+    return [...pool]
+      .sort((a, b) => (severityOrder[b.severity] || 0) - (severityOrder[a.severity] || 0))
+      .slice(0, 2);
+  }, [findingsData]);
+
   return (
     <div className="p-4 md:p-container-padding max-w-[1600px] mx-auto w-full text-on-surface">
 
@@ -165,11 +210,11 @@ export const FindingsList: React.FC = () => {
           <div className="absolute inset-0 bg-primary/5 opacity-0 group-hover:opacity-100 transition-opacity"></div>
           <span className="text-on-surface-variant font-label-mono text-[11px] uppercase tracking-widest z-10">Security Score</span>
           <div className="mt-2 flex items-baseline gap-1 z-10">
-            <span className="text-3xl font-headline-md font-bold text-on-surface">{activeProject.score}</span>
+            <span className="text-3xl font-headline-md font-bold text-on-surface">{activeProject.score ?? '--'}</span>
             <span className="text-on-surface-variant text-sm">/100</span>
           </div>
           <div className="w-full bg-surface-container h-1 mt-3 rounded-full overflow-hidden z-10">
-            <div className="bg-primary h-full rounded-full" style={{ width: `${activeProject.score}%` }}></div>
+            <div className="bg-primary h-full rounded-full" style={{ width: `${activeProject.score ?? 0}%` }}></div>
           </div>
         </GlassPanel>
 
@@ -180,21 +225,21 @@ export const FindingsList: React.FC = () => {
           <div className="mt-2 flex items-center gap-2 z-10">
             <span className="material-symbols-outlined text-[#ff9800] text-[28px]">warning</span>
             <span className="text-2xl font-headline-md font-bold text-on-surface">
-              {activeProject.score < 60 ? 'Critical' : activeProject.score < 80 ? 'High' : 'Low'}
+              {activeProject.score === null || activeProject.score === undefined ? 'N/A' : activeProject.score < 60 ? 'Critical' : activeProject.score < 80 ? 'High' : 'Low'}
             </span>
           </div>
         </GlassPanel>
 
-        {/* Confirmed */}
+        {/* Verified Vulns */}
         <GlassPanel className="rounded-lg p-4 flex flex-col justify-between group">
-          <span className="text-on-surface-variant font-label-mono text-[11px] uppercase tracking-widest">Confirmed Vulns</span>
+          <span className="text-on-surface-variant font-label-mono text-[11px] uppercase tracking-widest">Verified Vulns</span>
           <div className="mt-2 z-10">
             <span className="text-3xl font-headline-md font-bold text-on-surface">
-              {activeProject.critical + activeProject.high}
+              {findingsData.filter(f => f.verificationStatus === 'VERIFIED' || f.verificationStatus === 'CORROBORATED').length}
             </span>
           </div>
-          <span className="text-error text-xs flex items-center gap-1 mt-1">
-            <span className="material-symbols-outlined text-[14px]">arrow_upward</span> +4 from last scan
+          <span className="text-on-surface-variant text-xs flex items-center gap-1 mt-1 font-label-mono uppercase">
+            Pending Verification
           </span>
         </GlassPanel>
 
@@ -202,19 +247,21 @@ export const FindingsList: React.FC = () => {
         <GlassPanel className="rounded-lg p-4 flex flex-col justify-between group">
           <span className="text-on-surface-variant font-label-mono text-[11px] uppercase tracking-widest">False Positives</span>
           <div className="mt-2 z-10">
-            <span className="text-3xl font-headline-md font-bold text-on-surface">142</span>
+            <span className="text-3xl font-headline-md font-bold text-on-surface">
+              {findingsData.filter(f => f.status === 'False Positive').length}
+            </span>
           </div>
           <span className="text-primary text-xs flex items-center gap-1 mt-1">
-            <span className="material-symbols-outlined text-[14px]">smart_toy</span> AI Validated
+            <span className="material-symbols-outlined text-[14px]">smart_toy</span> Verified
           </span>
         </GlassPanel>
 
-        {/* Scan Duration */}
+        {/* Scan Status */}
         <GlassPanel className="rounded-lg p-4 flex flex-col justify-between group">
-          <span className="text-on-surface-variant font-label-mono text-[11px] uppercase tracking-widest">Scan Duration</span>
+          <span className="text-on-surface-variant font-label-mono text-[11px] uppercase tracking-widest font-mono">Scan Status</span>
           <div className="mt-2 z-10 flex items-center gap-2">
-            <span className="material-symbols-outlined text-on-surface-variant">timer</span>
-            <span className="text-2xl font-headline-md font-bold text-on-surface">14m 22s</span>
+            <span className="material-symbols-outlined text-primary">task_alt</span>
+            <span className="text-xl font-headline-md font-bold text-on-surface uppercase">Completed</span>
           </div>
         </GlassPanel>
 
@@ -444,7 +491,9 @@ export const FindingsList: React.FC = () => {
                         </td>
                         <td className="py-3 px-4 align-top pt-4">
                           <div className="flex flex-col gap-1">
-                            <span className={`font-code-sm ${cvssColor}`}>{item.cvss}</span>
+                            <span className={`font-code-sm ${cvssColor}`}>
+                              {item.cvss !== null && item.cvss !== undefined ? (item.cvss > 0 ? item.cvss.toFixed(1) : item.cvss) : 'N/A'}
+                            </span>
                             <span className="text-xs text-on-surface-variant">{item.confidence}% Conf.</span>
                           </div>
                         </td>
@@ -517,19 +566,25 @@ export const FindingsList: React.FC = () => {
                 <h5 className="text-xs font-label-mono uppercase tracking-widest text-error mb-3 flex items-center gap-2">
                   <span className="material-symbols-outlined text-[16px]">warning</span> Most Exploitable
                 </h5>
-                <div className="bg-surface-container p-3 rounded border border-error/20 relative overflow-hidden">
-                  <div className="absolute left-0 top-0 bottom-0 w-1 bg-error"></div>
-                  <p className="text-sm font-medium text-white mb-1">RCE via Deserialization</p>
-                  <p className="text-xs text-on-surface-variant mb-2 line-clamp-2 leading-relaxed">
-                    Kyptic AI verified a publicly available exploit chain that allows unauthenticated remote code execution on the main application server.
-                  </p>
-                  <button
-                    onClick={() => navigate('/findings/finding-2')}
-                    className="text-xs text-primary hover:underline font-medium cursor-pointer bg-transparent border-none"
-                  >
-                    View Attack Path →
-                  </button>
-                </div>
+                {mostExploitableFinding ? (
+                  <div className="bg-surface-container p-3 rounded border border-error/20 relative overflow-hidden">
+                    <div className="absolute left-0 top-0 bottom-0 w-1 bg-error"></div>
+                    <p className="text-sm font-medium text-white mb-1">{mostExploitableFinding.title}</p>
+                    <p className="text-xs text-on-surface-variant mb-2 line-clamp-2 leading-relaxed">
+                      {mostExploitableFinding.cwe} in {mostExploitableFinding.component}
+                    </p>
+                    <button
+                      onClick={() => navigate(`/findings/${mostExploitableFinding.id}`)}
+                      className="text-xs text-primary hover:underline font-medium cursor-pointer bg-transparent border-none"
+                    >
+                      View Finding Details →
+                    </button>
+                  </div>
+                ) : (
+                  <div className="bg-surface-container p-3 rounded border border-outline-variant/30 text-xs text-on-surface-variant">
+                    No active vulnerabilities identified.
+                  </div>
+                )}
               </div>
 
               {/* Remediation Estimate */}
@@ -538,17 +593,17 @@ export const FindingsList: React.FC = () => {
                   Est. Remediation Effort
                 </h5>
                 <div className="flex items-end gap-2 mb-2">
-                  <span className="text-3xl font-headline-md font-bold text-white">4.5</span>
+                  <span className="text-3xl font-headline-md font-bold text-white">{remediationEffort.total}</span>
                   <span className="text-on-surface-variant mb-1 text-sm">hours total</span>
                 </div>
                 <div className="flex h-1.5 rounded-full overflow-hidden w-full bg-surface-container">
-                  <div className="bg-error w-[30%]" title="Critical"></div>
-                  <div className="bg-[#ff9800] w-[50%]" title="High"></div>
-                  <div className="bg-outline-variant w-[20%]" title="Medium/Low"></div>
+                  <div className="bg-error" style={{ width: `${remediationEffort.critPct}%` }} title="Critical"></div>
+                  <div className="bg-[#ff9800]" style={{ width: `${remediationEffort.highPct}%` }} title="High"></div>
+                  <div className="bg-outline-variant" style={{ width: `${remediationEffort.medLowPct}%` }} title="Medium/Low"></div>
                 </div>
                 <div className="flex justify-between text-[10px] text-on-surface-variant mt-1 font-label-mono uppercase">
-                  <span>Dev: 3h</span>
-                  <span>DevOps: 1.5h</span>
+                  <span>Dev: {remediationEffort.devHours}h</span>
+                  <span>DevOps: {remediationEffort.devOpsHours}h</span>
                 </div>
               </div>
 
@@ -557,34 +612,31 @@ export const FindingsList: React.FC = () => {
                 <h5 className="text-xs font-label-mono uppercase tracking-widest text-on-surface-variant mb-3">
                   Suggested Priority
                 </h5>
-                <ol className="space-y-3">
-                  <li className="flex items-start gap-2">
-                    <span className="bg-primary/20 text-primary w-5 h-5 rounded flex items-center justify-center text-xs font-bold shrink-0 mt-0.5">
-                      1
-                    </span>
-                    <div>
-                      <p className="text-sm text-white">Patch Deserialization Flaw</p>
-                      <p className="text-[11px] text-on-surface-variant">Update core/utils/DataParser.java</p>
-                    </div>
-                  </li>
-                  <li className="flex items-start gap-2">
-                    <span className="bg-surface-container text-on-surface-variant w-5 h-5 rounded flex items-center justify-center text-xs font-bold shrink-0 mt-0.5">
-                      2
-                    </span>
-                    <div>
-                      <p className="text-sm text-white">Rotate AWS Credentials</p>
-                      <p className="text-[11px] text-on-surface-variant">Found in deployment.yaml</p>
-                    </div>
-                  </li>
-                </ol>
+                {topPriorityFindings.length > 0 ? (
+                  <ol className="space-y-3">
+                    {topPriorityFindings.map((finding, idx) => (
+                      <li key={finding.id} className="flex items-start gap-2 cursor-pointer group" onClick={() => navigate(`/findings/${finding.id}`)}>
+                        <span className={`w-5 h-5 rounded flex items-center justify-center text-xs font-bold shrink-0 mt-0.5 ${idx === 0 ? 'bg-primary/20 text-primary' : 'bg-surface-container text-on-surface-variant'}`}>
+                          {idx + 1}
+                        </span>
+                        <div>
+                          <p className="text-sm text-white group-hover:text-primary transition-colors">{finding.title}</p>
+                          <p className="text-[11px] text-on-surface-variant">{finding.component}</p>
+                        </div>
+                      </li>
+                    ))}
+                  </ol>
+                ) : (
+                  <p className="text-xs text-on-surface-variant">No priority actions required.</p>
+                )}
               </div>
 
               {/* Generate Secure Patches Action Button */}
               <button
-                onClick={() => alert('Generating secure patch playbooks...')}
+                onClick={() => navigate('/copilot')}
                 className="w-full bg-primary/10 border border-primary/30 text-primary py-2.5 rounded font-label-mono text-[11px] uppercase tracking-wider hover:bg-primary/20 hover:text-white transition-all flex items-center justify-center gap-2 cursor-pointer"
               >
-                <span className="material-symbols-outlined text-[16px]">code_blocks</span> Generate Secure Patches
+                <span className="material-symbols-outlined text-[16px]">code_blocks</span> Open AI Remediation
               </button>
 
             </div>

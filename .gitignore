@@ -31,8 +31,10 @@ __pycache__/
 venv/
 .env
 
-# Local Kyptic database
+# Local Kyptic database & backups
 backend/*.db
+backend/*.db.bak
+backend/baseline_verification.json
 
 # Kyptic local backend data
 backend/data/
@@ -44,3 +46,5 @@ __pycache__/
 # Local test artifacts
 kyptic-test-project/
 kyptic-test-project.zip
+scratch/
+kyptic-demo-vulnerable-app.zip

@@ -1,3 +1,4 @@
+import { getAuthHeaders } from './auth';
 import type { TargetedVerificationResultApiData } from './findings';
 
 export interface VulnerabilityDefinitionApiData {
@@ -27,6 +28,8 @@ export interface StandaloneVerificationRequest {
   http_method: string;
   path: string;
   vulnerability_id: string;
+  parameter?: string;
+  test_value?: string;
   auth_type?: string;
   auth_header_name?: string;
   auth_token?: string;
@@ -36,7 +39,12 @@ const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || 'http://localhost:800
 
 const request = async <T>(path: string, options?: RequestInit): Promise<T> => {
   try {
-    const response = await fetch(`${API_BASE_URL}${path}`, options);
+    const headers = getAuthHeaders(options?.headers as Record<string, string> | undefined);
+    const response = await fetch(`${API_BASE_URL}${path}`, {
+      ...options,
+      headers,
+      credentials: 'include',
+    });
     if (!response.ok) {
       const errText = await response.text();
       throw new Error(`The Kyptic backend returned an error (${response.status}): ${errText}`);

@@ -29,10 +29,26 @@ class TestReportService(unittest.TestCase):
 
         app.dependency_overrides[get_db] = override_get_db
 
+        # Seed test user
+        from app.models.user import User
+        from app.services.auth_service import create_access_token, hash_password
+        from app.config import settings
+
+        self.user = User(
+            email=settings.BOOTSTRAP_OWNER_EMAIL,
+            password_hash=hash_password("Password123!"),
+            is_active=True,
+        )
+        self.db.add(self.user)
+        self.db.commit()
+        self.db.refresh(self.user)
+        self.token = create_access_token({"user_id": self.user.id, "email": self.user.email}, db=self.db)
+
         # Seed test project, scan, and findings
         self.project = Project(
             name="Report Test Application",
             technology="Python/React",
+            user_id=self.user.id,
             source_type="ZIP",
             source_status="READY",
         )
@@ -139,16 +155,18 @@ class TestReportService(unittest.TestCase):
     # 6. Test FastAPI endpoints via TestClient
     def test_api_endpoints(self):
         client = TestClient(app)
+        headers = {"Authorization": f"Bearer {self.token}"}
         
         # GET /api/v1/reports/templates
-        res_templates = client.get("/api/v1/reports/templates")
+        res_templates = client.get("/api/v1/reports/templates", headers=headers)
         self.assertEqual(res_templates.status_code, 200)
         self.assertGreaterEqual(len(res_templates.json()), 4)
 
         # POST /api/v1/reports/generate (json)
         res_gen_json = client.post(
             "/api/v1/reports/generate",
-            json={"project_id": self.project.id, "report_type": "executive", "format": "json"}
+            json={"project_id": self.project.id, "report_type": "executive", "format": "json"},
+            headers=headers
         )
         self.assertEqual(res_gen_json.status_code, 200)
         self.assertEqual(res_gen_json.json()["metrics"]["security_score"], 74)
@@ -156,7 +174,8 @@ class TestReportService(unittest.TestCase):
         # POST /api/v1/reports/generate (pdf)
         res_gen_pdf = client.post(
             "/api/v1/reports/generate",
-            json={"project_id": self.project.id, "report_type": "developer", "format": "pdf"}
+            json={"project_id": self.project.id, "report_type": "developer", "format": "pdf"},
+            headers=headers
         )
         self.assertEqual(res_gen_pdf.status_code, 200)
         self.assertEqual(res_gen_pdf.headers["content-type"], "application/pdf")

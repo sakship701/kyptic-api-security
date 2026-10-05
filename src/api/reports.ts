@@ -1,4 +1,6 @@
-const API_BASE_URL = 'http://localhost:8000/api/v1';
+import { getAuthHeaders } from './auth';
+
+const API_BASE_URL = ((import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000').replace(/\/$/, '')) + '/api/v1';
 
 export interface ReportTemplateApiData {
   id: string;
@@ -17,7 +19,10 @@ export interface ReportGeneratePayload {
 }
 
 export const fetchReportTemplates = async (): Promise<ReportTemplateApiData[]> => {
-  const response = await fetch(`${API_BASE_URL}/reports/templates`);
+  const response = await fetch(`${API_BASE_URL}/reports/templates`, {
+    headers: getAuthHeaders(),
+    credentials: 'include',
+  });
   if (!response.ok) {
     throw new Error('Failed to fetch report templates');
   }
@@ -27,9 +32,10 @@ export const fetchReportTemplates = async (): Promise<ReportTemplateApiData[]> =
 export const generateReportJson = async (projectId: number, reportType: string): Promise<any> => {
   const response = await fetch(`${API_BASE_URL}/reports/generate`, {
     method: 'POST',
-    headers: {
+    headers: getAuthHeaders({
       'Content-Type': 'application/json',
-    },
+    }),
+    credentials: 'include',
     body: JSON.stringify({
       project_id: projectId,
       report_type: reportType,
@@ -46,9 +52,10 @@ export const generateReportJson = async (projectId: number, reportType: string):
 export const generateReportHtml = async (projectId: number, reportType: string): Promise<string> => {
   const response = await fetch(`${API_BASE_URL}/reports/generate`, {
     method: 'POST',
-    headers: {
+    headers: getAuthHeaders({
       'Content-Type': 'application/json',
-    },
+    }),
+    credentials: 'include',
     body: JSON.stringify({
       project_id: projectId,
       report_type: reportType,
@@ -65,9 +72,10 @@ export const generateReportHtml = async (projectId: number, reportType: string):
 export const downloadReportPdf = async (projectId: number, reportType: string): Promise<void> => {
   const response = await fetch(`${API_BASE_URL}/reports/generate`, {
     method: 'POST',
-    headers: {
+    headers: getAuthHeaders({
       'Content-Type': 'application/json',
-    },
+    }),
+    credentials: 'include',
     body: JSON.stringify({
       project_id: projectId,
       report_type: reportType,

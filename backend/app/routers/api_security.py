@@ -7,10 +7,12 @@ from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from app.database import get_db
+from app.dependencies.auth import get_current_user, verify_project_access
 from app.models.project import Project
 from app.models.scan import Scan, ScanStatus
 from app.models.finding import Finding, FindingStatus, FindingSource
 from app.models.api_endpoint import ApiEndpoint
+from app.models.user import User
 from app.schemas.scan import ScanResponse
 from app.schemas.api_security import (
     ApiEndpointResponse,
@@ -23,7 +25,7 @@ from app.schemas.api_security import (
 from app.services.api_spec_parser import OpenApiSpecParser, MAX_SPEC_SIZE
 from app.services.api_security_scanner import ApiSecurityScanner, run_static_api_analysis
 from app.services.storage_service import get_project_dir
-from app.services.ssrf_protection import is_ssrf_safe_url
+from app.services.ssrf_protection import is_ssrf_safe_url, is_local_demo_target
 from app.services.dast_http_client import DastHttpClient, DastAuthContext, redact_secrets, DastError
 from app.services.dast_probes import DastProbeEngine, DastVerificationStatus, map_probe_result_to_finding, run_active_dast_probes
 
@@ -38,18 +40,16 @@ router = APIRouter(prefix="/api", tags=["api-security"])
     response_model=DastTargetConfigResponse,
 )
 def get_dast_config(
-    project_id: int,
+    project: Project = Depends(verify_project_access),
     db: Session = Depends(get_db),
 ) -> dict:
-    project = db.get(Project, project_id)
-    if project is None:
-        raise HTTPException(status_code=404, detail="Project not found")
-
+    project_id = project.id
     target_url = project.api_target_url
     is_safe = False
     msg = "No live DAST target URL configured."
     if target_url:
-        is_safe, msg = is_ssrf_safe_url(target_url, allow_localhost=False)
+        is_demo = is_local_demo_target(target_url)
+        is_safe, msg = is_ssrf_safe_url(target_url, allow_localhost=is_demo)
 
     return {
         "project_id": project_id,
@@ -67,16 +67,14 @@ def get_dast_config(
     response_model=DastTargetConfigResponse,
 )
 def update_dast_config(
-    project_id: int,
     config_in: DastTargetConfigRequest,
+    project: Project = Depends(verify_project_access),
     db: Session = Depends(get_db),
 ) -> dict:
-    project = db.get(Project, project_id)
-    if project is None:
-        raise HTTPException(status_code=404, detail="Project not found")
-
+    project_id = project.id
     target_url = config_in.api_target_url.strip()
-    is_safe, msg = is_ssrf_safe_url(target_url, allow_localhost=False)
+    is_demo = is_local_demo_target(target_url)
+    is_safe, msg = is_ssrf_safe_url(target_url, allow_localhost=is_demo)
     if not is_safe:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -105,13 +103,9 @@ def update_dast_config(
     response_model=DastTestConnectionResponse,
 )
 def test_dast_connection(
-    project_id: int,
+    project: Project = Depends(verify_project_access),
     db: Session = Depends(get_db),
 ) -> dict:
-    project = db.get(Project, project_id)
-    if project is None:
-        raise HTTPException(status_code=404, detail="Project not found")
-
     target_url = project.api_target_url
     if not target_url:
         raise HTTPException(
@@ -119,7 +113,8 @@ def test_dast_connection(
             detail="No DAST target URL configured for this project. Update DAST configuration first."
         )
 
-    is_safe, ssrf_msg = is_ssrf_safe_url(target_url, allow_localhost=False)
+    is_demo = is_local_demo_target(target_url)
+    is_safe, ssrf_msg = is_ssrf_safe_url(target_url, allow_localhost=is_demo)
     if not is_safe:
         return {
             "status": "BLOCKED",
@@ -129,7 +124,7 @@ def test_dast_connection(
             "message": redact_secrets(f"SSRF validation blocked request: {ssrf_msg}")
         }
 
-    client = DastHttpClient(allow_localhost=False)
+    client = DastHttpClient(allow_localhost=is_demo)
     auth_ctx = DastAuthContext(
         auth_type=project.api_auth_type or "NONE",
         header_name=project.api_auth_header_name or "Authorization"
@@ -166,6 +161,7 @@ def test_dast_connection(
             "message": redact_secrets(f"Connection test failed: {str(e)}")
         }
 
+
 @router.post(
     "/projects/{project_id}/ingest/openapi",
     response_model=OpenApiIngestResponse,
@@ -174,11 +170,10 @@ def test_dast_connection(
 async def ingest_openapi_spec(
     project_id: int,
     file: UploadFile = File(...),
+    project: Project = Depends(verify_project_access),
     db: Session = Depends(get_db),
 ) -> dict:
-    project = db.get(Project, project_id)
-    if project is None:
-        raise HTTPException(status_code=404, detail="Project not found")
+    project_id = project.id
 
     # Enforce Upload File Extension & Path Traversal Guard
     raw_filename = file.filename or "openapi_spec.json"
@@ -261,12 +256,10 @@ async def ingest_openapi_spec(
     status_code=status.HTTP_200_OK,
 )
 def run_api_security_analysis(
-    project_id: int,
+    project: Project = Depends(verify_project_access),
     db: Session = Depends(get_db),
 ) -> Scan:
-    project = db.get(Project, project_id)
-    if project is None:
-        raise HTTPException(status_code=404, detail="Project not found")
+    project_id = project.id
 
     if not project.source_type or project.source_status != "READY":
         raise HTTPException(
@@ -358,18 +351,25 @@ def run_api_security_analysis(
         )
 
 
+GLOBAL_SCANNER_CONFIG = {"dast_enabled": True}
+
+
 @router.post(
     "/projects/{project_id}/api-security/dast/scan",
     response_model=ScanResponse,
     status_code=status.HTTP_200_OK,
 )
 def run_dast_active_scan(
-    project_id: int,
+    project: Project = Depends(verify_project_access),
     db: Session = Depends(get_db),
 ) -> Scan:
-    project = db.get(Project, project_id)
-    if project is None:
-        raise HTTPException(status_code=404, detail="Project not found")
+    project_id = project.id
+
+    if not GLOBAL_SCANNER_CONFIG.get("dast_enabled", True):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Global DAST engine is disabled."
+        )
 
     if not project.api_dast_enabled:
         raise HTTPException(
@@ -384,7 +384,8 @@ def run_dast_active_scan(
             detail="No DAST target URL configured for this project."
         )
 
-    is_safe, ssrf_msg = is_ssrf_safe_url(target_url, allow_localhost=False)
+    is_demo = is_local_demo_target(target_url)
+    is_safe, ssrf_msg = is_ssrf_safe_url(target_url, allow_localhost=is_demo)
     if not is_safe:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -398,7 +399,7 @@ def run_dast_active_scan(
             detail="No endpoints found in inventory to scan. Ingest an OpenAPI spec first."
         )
 
-    # Phase 3A: Check if a DAST scan is already running
+    # Check if a DAST scan is already running for this project
     existing_running_scan = db.scalar(
         select(Scan).where(
             Scan.project_id == project_id,
@@ -422,7 +423,6 @@ def run_dast_active_scan(
         scanner_version="1.0.0",
         dast_status="QUEUED",
         started_at=datetime.utcnow(),
-        target_path=target_url,
     )
     db.add(scan)
     db.commit()
@@ -433,6 +433,10 @@ def run_dast_active_scan(
     scan.current_phase = "Running Dynamic Probes"
     scan.dast_status = "RUNNING"
     db.commit()
+
+    # Fetch existing findings for correlation
+    existing_findings = list(db.scalars(select(Finding).where(Finding.project_id == project_id)).all())
+    existing_findings_map = {(f.file_path, f.title): f for f in existing_findings}
 
     start_time = time.time()
 
@@ -485,16 +489,13 @@ def run_dast_active_scan(
     response_model=list[ApiEndpointResponse],
 )
 def list_api_endpoints(
-    project_id: int,
+    project: Project = Depends(verify_project_access),
     db: Session = Depends(get_db),
 ) -> list[ApiEndpoint]:
-    if db.get(Project, project_id) is None:
-        raise HTTPException(status_code=404, detail="Project not found")
-
     endpoints = list(
         db.scalars(
             select(ApiEndpoint)
-            .where(ApiEndpoint.project_id == project_id)
+            .where(ApiEndpoint.project_id == project.id)
             .order_by(ApiEndpoint.risk_score.desc(), ApiEndpoint.path)
         ).all()
     )
@@ -506,15 +507,12 @@ def list_api_endpoints(
     response_model=ApiEndpointResponse,
 )
 def get_api_endpoint(
-    project_id: int,
     endpoint_id: int,
+    project: Project = Depends(verify_project_access),
     db: Session = Depends(get_db),
 ) -> ApiEndpoint:
-    if db.get(Project, project_id) is None:
-        raise HTTPException(status_code=404, detail="Project not found")
-
     endpoint = db.get(ApiEndpoint, endpoint_id)
-    if endpoint is None or endpoint.project_id != project_id:
+    if endpoint is None or endpoint.project_id != project.id:
         raise HTTPException(status_code=404, detail="API Endpoint not found")
 
     return endpoint
@@ -525,12 +523,10 @@ def get_api_endpoint(
     response_model=ApiSecuritySummaryResponse,
 )
 def get_api_security_summary(
-    project_id: int,
+    project: Project = Depends(verify_project_access),
     db: Session = Depends(get_db),
 ) -> dict:
-    if db.get(Project, project_id) is None:
-        raise HTTPException(status_code=404, detail="Project not found")
-
+    project_id = project.id
     endpoints = list(db.scalars(select(ApiEndpoint).where(ApiEndpoint.project_id == project_id)).all())
     findings = list(
         db.scalars(
@@ -604,13 +600,10 @@ def get_api_security_summary(
     response_model=List[GreyBoxContextResponse],
 )
 def get_project_greybox_context(
-    project_id: int,
+    project: Project = Depends(verify_project_access),
     db: Session = Depends(get_db),
 ) -> List[dict]:
-    project = db.get(Project, project_id)
-    if project is None:
-        raise HTTPException(status_code=404, detail="Project not found")
-
+    project_id = project.id
     findings = list(db.scalars(select(Finding).where(Finding.project_id == project_id)).all())
     endpoints = list(db.scalars(select(ApiEndpoint).where(ApiEndpoint.project_id == project_id)).all())
 

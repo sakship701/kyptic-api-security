@@ -231,3 +231,49 @@ class TestSecretsEngine(unittest.TestCase):
             with self.assertRaises(RuntimeError) as context:
                 asyncio.run(scanner.scan(Path("/tmp/sandbox")))
             self.assertIn("execution failed with code 1", str(context.exception))
+
+    def test_detect_secrets_normalizer_nested_structure_and_malformed_res(self):
+        # 1. Outer scanner wrapper dict structure
+        scanner_output = {
+            "status": "SUCCESS",
+            "exit_code": 0,
+            "results": {
+                "version": "1.5.0",
+                "plugins_used": [{"name": "AWSKeyDetector"}],
+                "results": {
+                    "app.py": [
+                        {
+                            "type": "AWS Access Key",
+                            "filename": "app.py",
+                            "hashed_secret": "25910f981e85ca04baf359199dd0bd4a3ae738b6",
+                            "is_verified": False,
+                            "line_number": 12
+                        }
+                    ]
+                }
+            }
+        }
+        file_content = 'AKIAIOSFODNN7EXAMPLE = "secret"'
+        with patch("pathlib.Path.exists", return_value=True), \
+             patch("pathlib.Path.read_text", return_value=file_content):
+            findings = normalize_detect_secrets_results(
+                results_dict=scanner_output,
+                project_id=2,
+                scan_id=1,
+                scanner_version="1.5.0",
+                target_dir=Path("/tmp/sandbox")
+            )
+            self.assertEqual(len(findings), 1)
+            self.assertEqual(findings[0].file_path, "app.py")
+            self.assertEqual(findings[0].line_number, 12)
+
+        # 2. Empty results produces zero findings without crash
+        empty_findings = normalize_detect_secrets_results({}, project_id=1, scan_id=1)
+        self.assertEqual(len(empty_findings), 0)
+
+        # 3. Malformed results do not crash
+        malformed_1 = normalize_detect_secrets_results({"results": "invalid_string"}, project_id=1, scan_id=1)
+        self.assertEqual(len(malformed_1), 0)
+
+        malformed_2 = normalize_detect_secrets_results({"results": {"results": {"file.py": "not_a_list"}}}, project_id=1, scan_id=1)
+        self.assertEqual(len(malformed_2), 0)

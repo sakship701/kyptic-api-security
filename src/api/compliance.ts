@@ -1,3 +1,5 @@
+import { getAuthHeaders } from './auth';
+
 export interface ControlMappedFindingData {
   finding_id: number;
   title: string;
@@ -48,7 +50,10 @@ export const fetchProjectCompliance = async (
   framework: string = 'PCI_DSS'
 ): Promise<ComplianceResponseData> => {
   const query = new URLSearchParams({ framework });
-  const response = await fetch(`${API_BASE_URL}/api/projects/${projectId}/compliance?${query.toString()}`);
+  const response = await fetch(`${API_BASE_URL}/api/projects/${projectId}/compliance?${query.toString()}`, {
+    headers: getAuthHeaders(),
+    credentials: 'include',
+  });
   if (!response.ok) {
     const errText = await response.text();
     throw new Error(`Failed to load Compliance data (${response.status}): ${errText}`);

@@ -1,3 +1,5 @@
+import { getAuthHeaders } from './auth';
+
 export interface ApiEndpointData {
   id: number;
   project_id: number;
@@ -59,6 +61,12 @@ const getErrorMessage = (response: Response) => {
   if (response.status === 0) {
     return 'The Kyptic backend is unavailable. Start it on http://localhost:8000 and try again.';
   }
+  if (response.status === 401) {
+    return 'Authentication required. Please log in.';
+  }
+  if (response.status === 403) {
+    return 'Access denied. You do not have permission to view or modify this project.';
+  }
   return `The Kyptic backend returned an error (${response.status}). Please try again.`;
 };
 
@@ -66,8 +74,13 @@ export const ingestOpenApi = async (projectId: number, file: File): Promise<Open
   const formData = new FormData();
   formData.append('file', file);
 
+  const headers = getAuthHeaders() as Record<string, string>;
+  delete headers['Content-Type'];
+
   const response = await fetch(`${API_BASE_URL}/api/projects/${projectId}/ingest/openapi`, {
     method: 'POST',
+    headers,
+    credentials: 'include',
     body: formData,
   });
 
@@ -87,6 +100,8 @@ export const ingestOpenApi = async (projectId: number, file: File): Promise<Open
 export const analyzeApiSecurity = async (projectId: number): Promise<any> => {
   const response = await fetch(`${API_BASE_URL}/api/projects/${projectId}/api-security/analyze`, {
     method: 'POST',
+    headers: getAuthHeaders(),
+    credentials: 'include',
   });
 
   if (!response.ok) {
@@ -103,7 +118,10 @@ export const analyzeApiSecurity = async (projectId: number): Promise<any> => {
 };
 
 export const fetchApiEndpoints = async (projectId: number): Promise<ApiEndpointData[]> => {
-  const response = await fetch(`${API_BASE_URL}/api/projects/${projectId}/api-security/endpoints`);
+  const response = await fetch(`${API_BASE_URL}/api/projects/${projectId}/api-security/endpoints`, {
+    headers: getAuthHeaders(),
+    credentials: 'include',
+  });
   if (!response.ok) {
     throw new Error(getErrorMessage(response));
   }
@@ -111,7 +129,10 @@ export const fetchApiEndpoints = async (projectId: number): Promise<ApiEndpointD
 };
 
 export const fetchApiEndpointDetail = async (projectId: number, endpointId: number): Promise<ApiEndpointData> => {
-  const response = await fetch(`${API_BASE_URL}/api/projects/${projectId}/api-security/endpoints/${endpointId}`);
+  const response = await fetch(`${API_BASE_URL}/api/projects/${projectId}/api-security/endpoints/${endpointId}`, {
+    headers: getAuthHeaders(),
+    credentials: 'include',
+  });
   if (!response.ok) {
     throw new Error(getErrorMessage(response));
   }
@@ -119,16 +140,96 @@ export const fetchApiEndpointDetail = async (projectId: number, endpointId: numb
 };
 
 export const fetchApiSecuritySummary = async (projectId: number): Promise<ApiSecuritySummaryData> => {
-  const response = await fetch(`${API_BASE_URL}/api/projects/${projectId}/api-security/summary`);
+  const response = await fetch(`${API_BASE_URL}/api/projects/${projectId}/api-security/summary`, {
+    headers: getAuthHeaders(),
+    credentials: 'include',
+  });
   if (!response.ok) {
     throw new Error(getErrorMessage(response));
   }
   return response.json() as Promise<ApiSecuritySummaryData>;
 };
 
+export interface DastTargetConfigData {
+  project_id: number;
+  api_target_url: string | null;
+  api_dast_enabled: boolean;
+  api_auth_type: string | null;
+  api_auth_header_name: string | null;
+  is_ssrf_safe: boolean;
+  message: string;
+}
+
+export interface DastTargetConfigRequestData {
+  api_target_url: string;
+  api_dast_enabled: boolean;
+  api_auth_type?: string;
+  api_auth_header_name?: string;
+  api_auth_token?: string;
+}
+
 export const runDastActiveScan = async (projectId: number): Promise<any> => {
   const response = await fetch(`${API_BASE_URL}/api/projects/${projectId}/api-security/dast/scan`, {
     method: 'POST',
+    headers: getAuthHeaders(),
+    credentials: 'include',
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    try {
+      const errorJson = JSON.parse(errorText);
+      throw new Error(errorJson.detail || getErrorMessage(response));
+    } catch {
+      throw new Error(errorText || getErrorMessage(response));
+    }
+  }
+
+  return response.json();
+};
+
+export const fetchDastConfig = async (projectId: number): Promise<DastTargetConfigData> => {
+  const response = await fetch(`${API_BASE_URL}/api/projects/${projectId}/api-security/dast-config`, {
+    headers: getAuthHeaders(),
+    credentials: 'include',
+  });
+  if (!response.ok) {
+    throw new Error(getErrorMessage(response));
+  }
+  return response.json() as Promise<DastTargetConfigData>;
+};
+
+export const updateDastConfig = async (
+  projectId: number,
+  config: DastTargetConfigRequestData
+): Promise<DastTargetConfigData> => {
+  const response = await fetch(`${API_BASE_URL}/api/projects/${projectId}/api-security/dast-config`, {
+    method: 'PUT',
+    headers: getAuthHeaders({
+      'Content-Type': 'application/json',
+    }),
+    credentials: 'include',
+    body: JSON.stringify(config),
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    try {
+      const errorJson = JSON.parse(errorText);
+      throw new Error(errorJson.detail || getErrorMessage(response));
+    } catch {
+      throw new Error(errorText || getErrorMessage(response));
+    }
+  }
+
+  return response.json() as Promise<DastTargetConfigData>;
+};
+
+export const testDastConnection = async (projectId: number): Promise<any> => {
+  const response = await fetch(`${API_BASE_URL}/api/projects/${projectId}/api-security/dast/test-connection`, {
+    method: 'POST',
+    headers: getAuthHeaders(),
+    credentials: 'include',
   });
 
   if (!response.ok) {

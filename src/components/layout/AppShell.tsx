@@ -6,8 +6,23 @@ import { useApp } from '../../context/AppContext';
 import Logo from '../ui/Logo';
 
 export const AppShell: React.FC = () => {
-  const { isAuthenticated } = useApp();
+  const { isAuthenticated, authLoading } = useApp();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+
+  // While checking active session
+  if (authLoading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-[#06070A] text-on-surface">
+        <div className="flex flex-col items-center gap-4">
+          <Logo size="lg" />
+          <div className="flex items-center gap-2 text-primary font-label-mono text-sm">
+            <span className="material-symbols-outlined animate-spin text-lg">sync</span>
+            <span>Verifying session...</span>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   // Protect route
   if (!isAuthenticated) {
@@ -102,31 +117,22 @@ export const AppShell: React.FC = () => {
                 <span>Reports</span>
               </a>
             </li>
-            <li>
-              <a
-                href="/settings"
-                onClick={() => setMobileMenuOpen(false)}
-                className="flex items-center gap-3 px-4 py-3 rounded-lg text-on-surface-variant hover:bg-surface-container-high"
-              >
-                <span className="material-symbols-outlined">settings</span>
-                <span>Settings</span>
-              </a>
-            </li>
           </ul>
         </div>
       )}
 
-      {/* Desktop Sidebar */}
+      {/* Desktop Left Nav Drawer */}
       <SideNavBar />
 
-      {/* Main Content Layout */}
-      <div className="flex-1 flex flex-col min-w-0">
+      {/* Main Workspace Frame */}
+      <div className="flex-1 flex flex-col min-w-0 bg-[#06070A] h-screen overflow-y-auto">
+        {/* Global Context Bar */}
         <TopNavHeader />
-        
-        {/* Page Container Outlet */}
-        <div className="flex-1 flex flex-col overflow-x-hidden">
+
+        {/* Dynamic Viewport Container */}
+        <main className="flex-1 px-container-padding py-stack-lg max-w-content-width w-full mx-auto space-y-stack-xl">
           <Outlet />
-        </div>
+        </main>
       </div>
     </div>
   );

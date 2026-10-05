@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useApp } from '../../../context/AppContext';
 import GlassPanel from '../../../components/ui/GlassPanel';
@@ -7,28 +7,28 @@ import { ingestOpenApi } from '../../../api/api_security';
 
 export const ProjectOnboard: React.FC = () => {
   const navigate = useNavigate();
-  const { createProject } = useApp();
+  const { createProject, setActiveProjectId, startScan, refreshProjects } = useApp();
 
-  const [step, setStep] = useState(2); // Start at step 2 as shown in the Stitch design default, but user can navigate.
-  
-  // Step 1: Info States
-  const [projName, setProjName] = useState('Gateway Microservice');
-  const [projTech, setProjTech] = useState('Java/Spring');
-  const [projDesc, setProjDesc] = useState('Onboarding Java Gateway Microservice for core transaction routing.');
+  const [step, setStep] = useState(1);
+
+  // Step 1: Info States (Blank for clean new project initialization)
+  const [projName, setProjName] = useState('');
+  const [projTech, setProjTech] = useState('Node.js');
+  const [projDesc, setProjDesc] = useState('');
 
   // Step 2: Source States
-  const [sourceType, setSourceType] = useState('Git Repository'); // 'Upload ZIP' | 'Git Repository' | 'Website URL'
-  const [repoUrl, setRepoUrl] = useState('https://github.com/enterprise/gateway-service');
-  const [websiteUrl, setWebsiteUrl] = useState('https://example.com');
+  const [sourceType, setSourceType] = useState('Git Repository'); // 'Upload ZIP' | 'Git Repository' | 'Website URL' | 'OpenAPI Specification'
+  const [repoUrl, setRepoUrl] = useState('');
+  const [websiteUrl, setWebsiteUrl] = useState('');
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
 
   // Ingestion states (for Step 2 inline ingestion status)
   const [ingestStatus, setIngestStatus] = useState<'IDLE' | 'INGESTING' | 'READY' | 'FAILED'>('IDLE');
   const [ingestError, setIngestError] = useState<string | null>(null);
   const [createdProject, setCreatedProject] = useState<any | null>(null);
-  
+
   // Step 3: Analysis States
-  const [analysisMode, setAnalysisMode] = useState('Intelligent Scan'); // Intelligent Scan vs Custom Checklist
+  const [analysisMode, setAnalysisMode] = useState<'intelligent' | 'custom'>('intelligent');
 
   // Step 4: Advanced States
   const [scanners, setScanners] = useState({
@@ -43,6 +43,31 @@ export const ProjectOnboard: React.FC = () => {
   // Validation States
   const [errors, setErrors] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+
+  // Enforce clean, isolated wizard state on component mount
+  useEffect(() => {
+    setStep(1);
+    setProjName('');
+    setProjTech('Node.js');
+    setProjDesc('');
+    setSourceType('Git Repository');
+    setRepoUrl('');
+    setWebsiteUrl('');
+    setSelectedFile(null);
+    setIngestStatus('IDLE');
+    setIngestError(null);
+    setCreatedProject(null);
+    setAnalysisMode('intelligent');
+    setScanners({
+      whiteBox: true,
+      blackBox: true,
+      greyBox: true,
+      riskMapping: true,
+      crossValidation: true,
+      aiAnalysis: true,
+    });
+  }, []);
+
 
   // Connection Sources list
   const sources = [
@@ -65,6 +90,8 @@ export const ProjectOnboard: React.FC = () => {
           description: projDesc.trim() || null,
           repository_url: sourceType === 'Git Repository' ? repoUrl.trim() : null,
           technology: projTech,
+          source_type: sourceType === 'Upload ZIP' ? 'ZIP' : sourceType === 'Git Repository' ? 'GIT' : sourceType === 'Website URL' ? 'WEBSITE' : 'OPENAPI',
+          target_url: sourceType === 'Website URL' ? websiteUrl.trim() : null,
         });
         setCreatedProject(project);
       }
@@ -103,10 +130,12 @@ export const ProjectOnboard: React.FC = () => {
           if (sourceDetails.status === 'READY') {
             setIngestStatus('READY');
             isDone = true;
+            void refreshProjects();
           } else if (sourceDetails.status === 'FAILED') {
             setIngestStatus('FAILED');
             setIngestError(sourceDetails.error_message || 'Ingestion failed.');
             isDone = true;
+            void refreshProjects();
           }
           pollCount++;
         }
@@ -114,8 +143,9 @@ export const ProjectOnboard: React.FC = () => {
           throw new Error('Ingestion timed out. Please check the project list.');
         }
       } else {
-        // Website is instant READY
+        // Website or OpenAPI instant READY
         setIngestStatus('READY');
+        void refreshProjects();
       }
     } catch (err) {
       setIngestStatus('FAILED');
@@ -138,7 +168,19 @@ export const ProjectOnboard: React.FC = () => {
       }
       setStep(3);
     } else if (step === 3) {
-      setStep(4);
+      if (analysisMode === 'intelligent') {
+        setScanners({
+          whiteBox: true,
+          blackBox: true,
+          greyBox: true,
+          riskMapping: true,
+          crossValidation: true,
+          aiAnalysis: true,
+        });
+        setStep(5);
+      } else {
+        setStep(4);
+      }
     } else if (step === 4) {
       setStep(5);
     }
@@ -146,8 +188,18 @@ export const ProjectOnboard: React.FC = () => {
 
   const handleBack = () => {
     setErrors(null);
-    if (step > 1) {
-      setStep(step - 1);
+    if (step === 5) {
+      if (analysisMode === 'intelligent') {
+        setStep(3);
+      } else {
+        setStep(4);
+      }
+    } else if (step === 4) {
+      setStep(3);
+    } else if (step === 3) {
+      setStep(2);
+    } else if (step === 2) {
+      setStep(1);
     } else {
       navigate('/projects');
     }
@@ -157,6 +209,21 @@ export const ProjectOnboard: React.FC = () => {
     setLoading(true);
     setErrors(null);
     try {
+      if (createdProject && createdProject.id) {
+        const payload = {
+          projectId: createdProject.id,
+          analysisMode,
+          scanners,
+          sourceType,
+          projectName: projName,
+          technology: projTech,
+          repositoryUrl: repoUrl || null,
+          targetUrl: websiteUrl || null,
+        };
+        console.log('Final create-project payload:', payload);
+        setActiveProjectId(String(createdProject.id));
+        void startScan(String(createdProject.id)).catch(() => undefined);
+      }
       navigate('/projects');
     } catch (error) {
       setErrors(error instanceof Error ? error.message : 'Unable to create project.');
@@ -165,27 +232,35 @@ export const ProjectOnboard: React.FC = () => {
     }
   };
 
-  // Render Stepper Badge Header helper
-  const renderStepIcon = (index: number) => {
-    if (step > index) {
-      return (
-        <div className="w-10 h-10 rounded-full bg-primary-container text-on-primary-container flex items-center justify-center shadow-[0_0_15px_rgba(49,146,252,0.3)]">
-          <span className="material-symbols-outlined text-sm font-bold">check</span>
-        </div>
-      );
-    }
-    if (step === index) {
-      return (
-        <div className="w-10 h-10 rounded-full border-2 border-primary bg-surface text-primary flex items-center justify-center shadow-[0_0_15px_rgba(49,146,252,0.1)]">
-          <span className="font-body-md font-bold">{index}</span>
-        </div>
-      );
-    }
-    return (
-      <div className="w-10 h-10 rounded-full border border-outline-variant bg-surface text-on-surface-variant flex items-center justify-center">
-        <span className="font-body-md">{index}</span>
-      </div>
-    );
+  const stepsList = analysisMode === 'intelligent'
+    ? [
+        { id: 1, label: 'Project Info', stepValue: 1 },
+        { id: 2, label: 'Source', stepValue: 2 },
+        { id: 3, label: 'Analysis', stepValue: 3 },
+        { id: 4, label: 'Review', stepValue: 5 },
+      ]
+    : [
+        { id: 1, label: 'Project Info', stepValue: 1 },
+        { id: 2, label: 'Source', stepValue: 2 },
+        { id: 3, label: 'Analysis', stepValue: 3 },
+        { id: 4, label: 'Advanced', stepValue: 4 },
+        { id: 5, label: 'Review', stepValue: 5 },
+      ];
+
+  const getActiveLayersList = () => {
+    const layerLabels: Record<string, string> = {
+      whiteBox: 'White-Box',
+      blackBox: 'Black-Box',
+      greyBox: 'Grey-Box',
+      riskMapping: 'Risk Mapping',
+      crossValidation: 'Cross-Validation',
+      aiAnalysis: 'AI Analysis',
+    };
+    const active = Object.entries(scanners)
+      .filter(([_, enabled]) => enabled)
+      .map(([key]) => layerLabels[key] || key);
+
+    return active.length > 0 ? active.join(', ') : 'None';
   };
 
   return (
@@ -203,44 +278,36 @@ export const ProjectOnboard: React.FC = () => {
         {/* Wizard Progress Stepper */}
         <div className="w-full max-w-4xl mb-16 px-4">
           <div className="flex items-center justify-between relative">
-            <div className="flex flex-col items-center gap-3 relative z-10">
-              {renderStepIcon(1)}
-              <span className={`font-label-mono text-label-mono ${step >= 1 ? 'text-primary' : 'text-on-surface-variant'}`}>
-                Project Info
-              </span>
-            </div>
-            <div className={`step-line ${step > 1 ? 'active' : ''}`}></div>
+            {stepsList.map((s, idx) => {
+              const isComplete = step > s.stepValue || (s.stepValue === 4 && step === 5 && analysisMode === 'custom');
+              const isActive = step === s.stepValue;
 
-            <div className="flex flex-col items-center gap-3 relative z-10">
-              {renderStepIcon(2)}
-              <span className={`font-label-mono text-label-mono ${step >= 2 ? 'text-primary' : 'text-on-surface-variant'}`}>
-                Source
-              </span>
-            </div>
-            <div className={`step-line ${step > 2 ? 'active' : ''}`}></div>
-
-            <div className="flex flex-col items-center gap-3 relative z-10">
-              {renderStepIcon(3)}
-              <span className={`font-label-mono text-label-mono ${step >= 3 ? 'text-primary' : 'text-on-surface-variant'}`}>
-                Analysis
-              </span>
-            </div>
-            <div className={`step-line ${step > 3 ? 'active' : ''}`}></div>
-
-            <div className="flex flex-col items-center gap-3 relative z-10">
-              {renderStepIcon(4)}
-              <span className={`font-label-mono text-label-mono ${step >= 4 ? 'text-primary' : 'text-on-surface-variant'}`}>
-                Advanced
-              </span>
-            </div>
-            <div className={`step-line ${step > 4 ? 'active' : ''}`}></div>
-
-            <div className="flex flex-col items-center gap-3 relative z-10">
-              {renderStepIcon(5)}
-              <span className={`font-label-mono text-label-mono ${step >= 5 ? 'text-primary' : 'text-on-surface-variant'}`}>
-                Review
-              </span>
-            </div>
+              return (
+                <React.Fragment key={s.label}>
+                  <div className="flex flex-col items-center gap-3 relative z-10">
+                    {isComplete ? (
+                      <div className="w-10 h-10 rounded-full bg-primary-container text-on-primary-container flex items-center justify-center shadow-[0_0_15px_rgba(49,146,252,0.3)]">
+                        <span className="material-symbols-outlined text-sm font-bold">check</span>
+                      </div>
+                    ) : isActive ? (
+                      <div className="w-10 h-10 rounded-full border-2 border-primary bg-surface text-primary flex items-center justify-center shadow-[0_0_15px_rgba(49,146,252,0.1)]">
+                        <span className="font-body-md font-bold">{s.id}</span>
+                      </div>
+                    ) : (
+                      <div className="w-10 h-10 rounded-full border border-outline-variant bg-surface text-on-surface-variant flex items-center justify-center">
+                        <span className="font-body-md">{s.id}</span>
+                      </div>
+                    )}
+                    <span className={`font-label-mono text-label-mono ${isActive || isComplete ? 'text-primary' : 'text-on-surface-variant'}`}>
+                      {s.label}
+                    </span>
+                  </div>
+                  {idx < stepsList.length - 1 && (
+                    <div className={`step-line ${isComplete ? 'active' : ''}`}></div>
+                  )}
+                </React.Fragment>
+              );
+            })}
           </div>
         </div>
 
@@ -657,23 +724,34 @@ export const ProjectOnboard: React.FC = () => {
                 {/* Mode 1: Intelligent Scan */}
                 <button
                   type="button"
-                  onClick={() => setAnalysisMode('Intelligent Scan')}
+                  onClick={() => {
+                    setAnalysisMode('intelligent');
+                    setScanners({
+                      whiteBox: true,
+                      blackBox: true,
+                      greyBox: true,
+                      riskMapping: true,
+                      crossValidation: true,
+                      aiAnalysis: true,
+                    });
+                  }}
                   className={`flex flex-col items-start gap-4 p-6 rounded-lg text-left border relative overflow-hidden transition-all duration-300 cursor-pointer ${
-                    analysisMode === 'Intelligent Scan'
+                    analysisMode === 'intelligent'
                       ? 'bg-primary-container/10 border-primary shadow-[0_0_15px_rgba(49,146,252,0.15)]'
                       : 'bg-surface-container-low border-outline-variant hover:border-on-surface-variant'
                   }`}
                 >
-                  {analysisMode === 'Intelligent Scan' && (
+
+                  {analysisMode === 'intelligent' && (
                     <div className="absolute top-4 right-4 w-6 h-6 rounded-full bg-primary flex items-center justify-center shadow-md">
                       <span className="material-symbols-outlined text-on-primary text-sm font-bold">check</span>
                     </div>
                   )}
-                  <div className={`p-3 rounded-lg border ${analysisMode === 'Intelligent Scan' ? 'bg-primary-container/10 border-primary/30 text-primary' : 'bg-surface-container-high border-outline-variant text-on-surface-variant'}`}>
+                  <div className={`p-3 rounded-lg border ${analysisMode === 'intelligent' ? 'bg-primary-container/10 border-primary/30 text-primary' : 'bg-surface-container-high border-outline-variant text-on-surface-variant'}`}>
                     <span className="material-symbols-outlined text-2xl">insights</span>
                   </div>
                   <div>
-                    <h4 className={`font-body-md font-semibold mb-1 ${analysisMode === 'Intelligent Scan' ? 'text-primary' : 'text-on-surface'}`}>
+                    <h4 className={`font-body-md font-semibold mb-1 ${analysisMode === 'intelligent' ? 'text-primary' : 'text-on-surface'}`}>
                       Intelligent Scan (Recommended)
                     </h4>
                     <p className="text-xs text-on-surface-variant leading-relaxed">
@@ -685,23 +763,23 @@ export const ProjectOnboard: React.FC = () => {
                 {/* Mode 2: Custom Checklist */}
                 <button
                   type="button"
-                  onClick={() => setAnalysisMode('Custom Checklist')}
+                  onClick={() => setAnalysisMode('custom')}
                   className={`flex flex-col items-start gap-4 p-6 rounded-lg text-left border relative overflow-hidden transition-all duration-300 cursor-pointer ${
-                    analysisMode === 'Custom Checklist'
+                    analysisMode === 'custom'
                       ? 'bg-primary-container/10 border-primary shadow-[0_0_15px_rgba(49,146,252,0.15)]'
                       : 'bg-surface-container-low border-outline-variant hover:border-on-surface-variant'
                   }`}
                 >
-                  {analysisMode === 'Custom Checklist' && (
+                  {analysisMode === 'custom' && (
                     <div className="absolute top-4 right-4 w-6 h-6 rounded-full bg-primary flex items-center justify-center shadow-md">
                       <span className="material-symbols-outlined text-on-primary text-sm font-bold">check</span>
                     </div>
                   )}
-                  <div className={`p-3 rounded-lg border ${analysisMode === 'Custom Checklist' ? 'bg-primary-container/10 border-primary/30 text-primary' : 'bg-surface-container-high border-outline-variant text-on-surface-variant'}`}>
+                  <div className={`p-3 rounded-lg border ${analysisMode === 'custom' ? 'bg-primary-container/10 border-primary/30 text-primary' : 'bg-surface-container-high border-outline-variant text-on-surface-variant'}`}>
                     <span className="material-symbols-outlined text-2xl">tune</span>
                   </div>
                   <div>
-                    <h4 className={`font-body-md font-semibold mb-1 ${analysisMode === 'Custom Checklist' ? 'text-primary' : 'text-on-surface'}`}>
+                    <h4 className={`font-body-md font-semibold mb-1 ${analysisMode === 'custom' ? 'text-primary' : 'text-on-surface'}`}>
                       Custom Checklist Scan
                     </h4>
                     <p className="text-xs text-on-surface-variant leading-relaxed">
@@ -860,15 +938,14 @@ export const ProjectOnboard: React.FC = () => {
                 )}
                 <div className="grid grid-cols-3 border-b border-outline-variant/30 pb-3">
                   <span className="text-on-surface-variant text-sm font-label-mono uppercase">Analysis Mode</span>
-                  <span className="col-span-2 text-[#a3defe] font-medium text-body-md">{analysisMode}</span>
+                  <span className="col-span-2 text-[#a3defe] font-medium text-body-md">
+                    {analysisMode === 'intelligent' ? 'Intelligent Scan' : 'Custom Checklist'}
+                  </span>
                 </div>
                 <div className="grid grid-cols-3">
                   <span className="text-on-surface-variant text-sm font-label-mono uppercase">Active Layers</span>
                   <span className="col-span-2 text-on-surface-variant text-sm">
-                    {Object.entries(scanners)
-                      .filter(([_, active]) => active)
-                      .map(([key]) => key.replace(/([A-Z])/g, ' $1'))
-                      .join(', ')}
+                    {getActiveLayersList()}
                   </span>
                 </div>
               </div>

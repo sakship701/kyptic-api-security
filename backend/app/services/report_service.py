@@ -14,46 +14,8 @@ from app.models.project import Project
 from app.models.scan import Scan, ScanStatus
 from app.models.finding import Finding, FindingSeverity, FindingSource
 from app.models.api_endpoint import ApiEndpoint
+from app.services.posture_service import calculate_risk_score
 
-
-def calculate_risk_score(findings: List[Finding]) -> Tuple[int, str, Dict[str, int]]:
-    """
-    Deterministic risk-score formula based ONLY on actual findings:
-    - Base Score = 100
-    - CRITICAL: -15 pts
-    - HIGH: -8 pts
-    - MEDIUM: -3 pts
-    - LOW: -1 pt
-    - INFO: 0 pts
-    Final Score = max(0, min(100, int(round(100 - total_deduction))))
-    """
-    counts = {"critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0}
-    for f in findings:
-        sev = str(f.severity.value if hasattr(f.severity, "value") else f.severity).lower()
-        if sev in counts:
-            counts[sev] += 1
-
-    deduction = (
-        (counts["critical"] * 15)
-        + (counts["high"] * 8)
-        + (counts["medium"] * 3)
-        + (counts["low"] * 1)
-    )
-
-    score = max(0, min(100, int(round(100 - deduction))))
-
-    if score >= 90:
-        grade = "A (Excellent)"
-    elif score >= 75:
-        grade = "B (Good)"
-    elif score >= 60:
-        grade = "C (Needs Improvement)"
-    elif score >= 40:
-        grade = "D (Poor)"
-    else:
-        grade = "F (Critical Risk)"
-
-    return score, grade, counts
 
 
 def map_owasp_category(category: str, title: str) -> str:

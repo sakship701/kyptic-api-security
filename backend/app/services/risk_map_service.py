@@ -118,16 +118,10 @@ class RiskMapService:
         # Layer 3: ENDPOINT Nodes
         endpoint_node_map: Dict[str, str] = {}
         y_endpoint = 150
-        if not endpoints:
-            # Create synthetic default endpoint node if no OpenAPI spec uploaded yet but findings exist
-            endpoints_data = [
-                {"id": 0, "method": "POST", "path": "/api/v1/target", "risk_score": overall_score, "risk_level": "HIGH"}
-            ]
-        else:
-            endpoints_data = [
-                {"id": ep.id, "method": ep.method, "path": ep.path, "risk_score": ep.risk_score, "risk_level": ep.risk_level}
-                for ep in endpoints
-            ]
+        endpoints_data = [
+            {"id": ep.id, "method": ep.method, "path": ep.path, "risk_score": ep.risk_score, "risk_level": ep.risk_level}
+            for ep in endpoints
+        ]
 
         for ep_idx, ep_data in enumerate(endpoints_data):
             ep_node_id = f"ep-{ep_data['id']}"

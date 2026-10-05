@@ -1,16 +1,41 @@
+import os
+import re
 from collections.abc import Generator
 from pathlib import Path
 
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
+from app.config import settings
 
-DATABASE_URL = f"sqlite:///{Path(__file__).resolve().parents[1] / 'kyptic.db'}"
+DATABASE_URL = settings.DATABASE_URL
 
-engine = create_engine(
-    DATABASE_URL,
-    connect_args={"check_same_thread": False},
-)
+
+def get_secret_safe_url(url: str) -> str:
+    """Mask password credentials in database URL for safe logging."""
+    if not url:
+        return ""
+    # Mask password in postgresql://user:pass@host/db or similar
+    return re.sub(r"://([^:]+):([^@]+)@", r"://\1:****@", url)
+
+
+def create_db_engine(db_url: str):
+    """Create engine configured appropriately for SQLite or PostgreSQL."""
+    if db_url.startswith("sqlite"):
+        return create_engine(
+            db_url,
+            connect_args={"check_same_thread": False},
+        )
+    else:
+        return create_engine(
+            db_url,
+            pool_pre_ping=True,
+            pool_size=10,
+            max_overflow=20,
+        )
+
+
+engine = create_db_engine(DATABASE_URL)
 SessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False)
 
 
@@ -26,95 +51,29 @@ def get_db() -> Generator[Session, None, None]:
         db.close()
 
 
-def update_db_schema() -> None:
-    Base.metadata.create_all(bind=engine)
-    inspector = inspect(engine)
-    if "projects" in inspector.get_table_names():
-        columns = [col['name'] for col in inspector.get_columns('projects')]
-        with engine.begin() as conn:
-            if "source_type" not in columns:
-                conn.execute(text("ALTER TABLE projects ADD COLUMN source_type VARCHAR(50)"))
-            if "source_status" not in columns:
-                conn.execute(text("ALTER TABLE projects ADD COLUMN source_status VARCHAR(50) NOT NULL DEFAULT 'NOT_INGESTED'"))
-            if "local_source_reference" not in columns:
-                conn.execute(text("ALTER TABLE projects ADD COLUMN local_source_reference VARCHAR(500)"))
-            if "target_url" not in columns:
-                conn.execute(text("ALTER TABLE projects ADD COLUMN target_url VARCHAR(500)"))
-            if "last_ingested_at" not in columns:
-                conn.execute(text("ALTER TABLE projects ADD COLUMN last_ingested_at DATETIME"))
-            if "ingestion_error" not in columns:
-                conn.execute(text("ALTER TABLE projects ADD COLUMN ingestion_error TEXT"))
-            if "api_target_url" not in columns:
-                conn.execute(text("ALTER TABLE projects ADD COLUMN api_target_url VARCHAR(500)"))
-            if "api_dast_enabled" not in columns:
-                conn.execute(text("ALTER TABLE projects ADD COLUMN api_dast_enabled BOOLEAN NOT NULL DEFAULT 0"))
-            if "api_auth_type" not in columns:
-                conn.execute(text("ALTER TABLE projects ADD COLUMN api_auth_type VARCHAR(50) DEFAULT 'NONE'"))
-            if "api_auth_header_name" not in columns:
-                conn.execute(text("ALTER TABLE projects ADD COLUMN api_auth_header_name VARCHAR(100) DEFAULT 'Authorization'"))
-            if "api_auth_token_hash" not in columns:
-                conn.execute(text("ALTER TABLE projects ADD COLUMN api_auth_token_hash VARCHAR(255)"))
+def verify_test_db_isolation(test_db_url: str) -> None:
+    """
+    Safety check ensuring tests do NOT execute against the production/dev database.
+    Prevents accidental database wiping or mutation.
+    """
+    prod_url = settings.DATABASE_URL
+    if not test_db_url:
+        raise ValueError("TEST_DATABASE_URL is not configured.")
 
-    if "scans" in inspector.get_table_names():
-        columns = [col['name'] for col in inspector.get_columns('scans')]
-        with engine.begin() as conn:
-            if "scanner" not in columns:
-                conn.execute(text("ALTER TABLE scans ADD COLUMN scanner VARCHAR(50)"))
-            if "scanner_version" not in columns:
-                conn.execute(text("ALTER TABLE scans ADD COLUMN scanner_version VARCHAR(50)"))
-            if "sca_status" not in columns:
-                conn.execute(text("ALTER TABLE scans ADD COLUMN sca_status VARCHAR(50)"))
-            if "dast_status" not in columns:
-                conn.execute(text("ALTER TABLE scans ADD COLUMN dast_status VARCHAR(50)"))
-            if "duration" not in columns:
-                conn.execute(text("ALTER TABLE scans ADD COLUMN duration FLOAT"))
-            if "result_count" not in columns:
-                conn.execute(text("ALTER TABLE scans ADD COLUMN result_count INTEGER"))
+    if test_db_url == prod_url:
+        raise RuntimeError(
+            f"SECURITY ERROR: TEST_DATABASE_URL matches production DATABASE_URL ({get_secret_safe_url(prod_url)}). "
+            "Tests must be executed against a separate test database!"
+        )
 
-    if "findings" in inspector.get_table_names():
-        columns = [col['name'] for col in inspector.get_columns('findings')]
-        with engine.begin() as conn:
-            if "rule_id" not in columns:
-                conn.execute(text("ALTER TABLE findings ADD COLUMN rule_id VARCHAR(255)"))
-            if "cwe" not in columns:
-                conn.execute(text("ALTER TABLE findings ADD COLUMN cwe VARCHAR(255)"))
-            if "owasp" not in columns:
-                conn.execute(text("ALTER TABLE findings ADD COLUMN owasp VARCHAR(255)"))
-            if "end_line_number" not in columns:
-                conn.execute(text("ALTER TABLE findings ADD COLUMN end_line_number INTEGER"))
-            if "code_snippet" not in columns:
-                conn.execute(text("ALTER TABLE findings ADD COLUMN code_snippet TEXT"))
-            if "scanner_name" not in columns:
-                conn.execute(text("ALTER TABLE findings ADD COLUMN scanner_name VARCHAR(50)"))
-            if "scanner_version" not in columns:
-                conn.execute(text("ALTER TABLE findings ADD COLUMN scanner_version VARCHAR(50)"))
-            if "fingerprint" not in columns:
-                conn.execute(text("ALTER TABLE findings ADD COLUMN fingerprint VARCHAR(500)"))
-            if "resolution_comment" not in columns:
-                conn.execute(text("ALTER TABLE findings ADD COLUMN resolution_comment TEXT"))
-            if "resolved_at" not in columns:
-                conn.execute(text("ALTER TABLE findings ADD COLUMN resolved_at DATETIME"))
-            if "confidence_score" not in columns:
-                conn.execute(text("ALTER TABLE findings ADD COLUMN confidence_score INTEGER NOT NULL DEFAULT 50"))
-            if "confidence_level" not in columns:
-                conn.execute(text("ALTER TABLE findings ADD COLUMN confidence_level VARCHAR(20) NOT NULL DEFAULT 'MEDIUM'"))
-            if "verification_status" not in columns:
-                conn.execute(text("ALTER TABLE findings ADD COLUMN verification_status VARCHAR(50) NOT NULL DEFAULT 'UNVERIFIED'"))
-            if "verification_explanation" not in columns:
-                conn.execute(text("ALTER TABLE findings ADD COLUMN verification_explanation TEXT"))
-            if "evidence_sources" not in columns:
-                conn.execute(text("ALTER TABLE findings ADD COLUMN evidence_sources VARCHAR(500)"))
-            if "correlation_count" not in columns:
-                conn.execute(text("ALTER TABLE findings ADD COLUMN correlation_count INTEGER NOT NULL DEFAULT 0"))
-            if "correlated_finding_ids" not in columns:
-                conn.execute(text("ALTER TABLE findings ADD COLUMN correlated_finding_ids TEXT"))
 
-    if "api_endpoints" in inspector.get_table_names():
-        columns = [col['name'] for col in inspector.get_columns('api_endpoints')]
-        with engine.begin() as conn:
-            if "bola_status" not in columns:
-                conn.execute(text("ALTER TABLE api_endpoints ADD COLUMN bola_status VARCHAR(50) NOT NULL DEFAULT 'NONE'"))
-            if "mass_assignment_status" not in columns:
-                conn.execute(text("ALTER TABLE api_endpoints ADD COLUMN mass_assignment_status VARCHAR(50) NOT NULL DEFAULT 'NONE'"))
-            if "dast_status" not in columns:
-                conn.execute(text("ALTER TABLE api_endpoints ADD COLUMN dast_status VARCHAR(50) NOT NULL DEFAULT 'UNTESTED'"))
+def validate_db_connection() -> bool:
+    """Validate database connectivity on application startup."""
+    try:
+        with engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
+        return True
+    except Exception as e:
+        safe_url = get_secret_safe_url(DATABASE_URL)
+        print(f"Database connection check failed for {safe_url}: {e}")
+        return False

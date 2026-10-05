@@ -1,43 +1,70 @@
 from datetime import datetime
-from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import func, select
+from fastapi import APIRouter, Depends, HTTPException, Request, status
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.database import get_db
+from app.dependencies.auth import (
+    get_current_user,
+    get_finding_with_ownership_check,
+    get_scan_with_ownership_check,
+    verify_project_access,
+)
 from app.models.finding import Finding, FindingSeverity, FindingStatus
 from app.models.project import Project
 from app.models.scan import Scan, ScanStatus
+from app.models.user import User
 from app.schemas.finding import FindingResponse, FindingUpdate
 
-
 router = APIRouter(prefix="/api", tags=["findings"])
-
-
-def get_finding_or_404(finding_id: int, db: Session) -> Finding:
-    finding = db.get(Finding, finding_id)
-    if finding is None:
-        raise HTTPException(status_code=404, detail="Finding not found")
-    return finding
 
 
 @router.get("/findings", response_model=list[FindingResponse])
 def list_findings(
     severity: FindingSeverity | None = None,
     finding_status: FindingStatus | None = None,
-    db: Session = Depends(get_db)
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
 ) -> list[Finding]:
-    query = select(Finding).order_by(Finding.created_at.desc())
+    user_project_ids = list(
+        db.scalars(
+            select(Project.id).where(Project.user_id == user.id)
+        ).all()
+    )
+
+    if not user_project_ids:
+        return []
+
+    query = (
+        select(Finding)
+        .where(Finding.project_id.in_(user_project_ids))
+        .order_by(Finding.created_at.desc())
+    )
     if severity is not None:
         query = query.where(Finding.severity == severity)
     if finding_status is not None:
         query = query.where(Finding.status == finding_status)
+
     return list(db.scalars(query).all())
 
 
 @router.get("/findings/summary")
 @router.get("/v1/findings/summary")
-def get_global_findings_summary(db: Session = Depends(get_db)) -> dict:
-    findings = db.scalars(select(Finding)).all()
+def get_global_findings_summary(
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict:
+    user_project_ids = list(
+        db.scalars(
+            select(Project.id).where(Project.user_id == user.id)
+        ).all()
+    )
+
+    if not user_project_ids:
+        findings = []
+    else:
+        findings = db.scalars(select(Finding).where(Finding.project_id.in_(user_project_ids))).all()
+
     open_count = sum(1 for f in findings if f.status == FindingStatus.OPEN)
     resolved_count = sum(1 for f in findings if f.status == FindingStatus.RESOLVED)
     fp_count = sum(1 for f in findings if f.status == FindingStatus.FALSE_POSITIVE)
@@ -62,17 +89,24 @@ def get_global_findings_summary(db: Session = Depends(get_db)) -> dict:
 
 
 @router.get("/findings/{finding_id}", response_model=FindingResponse)
-def get_finding(finding_id: int, db: Session = Depends(get_db)) -> Finding:
-    return get_finding_or_404(finding_id, db)
+def get_finding(
+    finding_id: int,
+    request: Request,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> Finding:
+    return get_finding_with_ownership_check(finding_id, request, user, db)
 
 
 @router.patch("/findings/{finding_id}", response_model=FindingResponse)
 def update_finding(
     finding_id: int,
     payload: FindingUpdate,
-    db: Session = Depends(get_db)
+    request: Request,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
 ) -> Finding:
-    finding = get_finding_or_404(finding_id, db)
+    finding = get_finding_with_ownership_check(finding_id, request, user, db)
     old_status = finding.status
     new_status = payload.status
 
@@ -93,17 +127,19 @@ def update_finding(
 
 
 @router.get("/projects/{project_id}/findings", response_model=list[FindingResponse])
-def list_project_findings(project_id: int, db: Session = Depends(get_db)) -> list[Finding]:
-    if db.get(Project, project_id) is None:
-        raise HTTPException(status_code=404, detail="Project not found")
-    return list(db.scalars(select(Finding).where(Finding.project_id == project_id).order_by(Finding.created_at.desc())).all())
+def list_project_findings(
+    project: Project = Depends(verify_project_access),
+    db: Session = Depends(get_db),
+) -> list[Finding]:
+    return list(db.scalars(select(Finding).where(Finding.project_id == project.id).order_by(Finding.created_at.desc())).all())
 
 
 @router.get("/projects/{project_id}/findings/summary")
-def get_project_findings_summary(project_id: int, db: Session = Depends(get_db)) -> dict:
-    if db.get(Project, project_id) is None:
-        raise HTTPException(status_code=404, detail="Project not found")
-
+def get_project_findings_summary(
+    project: Project = Depends(verify_project_access),
+    db: Session = Depends(get_db),
+) -> dict:
+    project_id = project.id
     findings = db.scalars(select(Finding).where(Finding.project_id == project_id)).all()
     open_count = sum(1 for f in findings if f.status == FindingStatus.OPEN)
     resolved_count = sum(1 for f in findings if f.status == FindingStatus.RESOLVED)
@@ -152,7 +188,11 @@ def get_project_findings_summary(project_id: int, db: Session = Depends(get_db))
 
 
 @router.get("/scans/{scan_id}/findings", response_model=list[FindingResponse])
-def list_scan_findings(scan_id: int, db: Session = Depends(get_db)) -> list[Finding]:
-    if db.get(Scan, scan_id) is None:
-        raise HTTPException(status_code=404, detail="Scan not found")
-    return list(db.scalars(select(Finding).where(Finding.scan_id == scan_id).order_by(Finding.created_at.desc())).all())
+def list_scan_findings(
+    scan_id: int,
+    request: Request,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> list[Finding]:
+    scan = get_scan_with_ownership_check(scan_id, request, user, db)
+    return list(db.scalars(select(Finding).where(Finding.scan_id == scan.id).order_by(Finding.created_at.desc())).all())

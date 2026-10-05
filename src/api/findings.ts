@@ -1,3 +1,5 @@
+import { getAuthHeaders } from './auth';
+
 export interface FindingApiData {
   id: number;
   project_id: number;
@@ -5,7 +7,7 @@ export interface FindingApiData {
   title: string;
   description: string;
   severity: 'critical' | 'high' | 'medium' | 'low' | 'info';
-  cvss: number;
+  cvss: number | null;
   category: string;
   file_path: string;
   line_number: number | null;
@@ -49,7 +51,12 @@ const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || 'http://localhost:800
 
 const request = async <T>(path: string, options?: RequestInit): Promise<T> => {
   try {
-    const response = await fetch(`${API_BASE_URL}${path}`, options);
+    const headers = getAuthHeaders(options?.headers as Record<string, string> | undefined);
+    const response = await fetch(`${API_BASE_URL}${path}`, {
+      ...options,
+      headers,
+      credentials: 'include',
+    });
     if (!response.ok) {
       const errText = await response.text();
       throw new Error(`The Kyptic backend returned an error (${response.status}): ${errText}`);

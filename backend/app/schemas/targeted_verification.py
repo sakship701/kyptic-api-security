@@ -15,6 +15,8 @@ class TargetedVerificationRequest(BaseModel):
     http_method: str = Field(default="GET", description="HTTP method (GET, POST, PUT, DELETE, PATCH)")
     path: str = Field(default="/", description="Endpoint path e.g. /api/v1/users/{id}")
     vulnerability_id: str = Field(..., description="Vulnerability ID or alias e.g. BOLA, BROKEN_AUTH, MASS_ASSIGNMENT, RATE_LIMIT")
+    parameter: Optional[str] = Field(default=None, description="Injectable or target parameter name e.g. q, id")
+    test_value: Optional[str] = Field(default=None, description="Test value / seed parameter value e.g. admin")
     auth_type: Optional[str] = Field(default="NONE", description="Auth type: NONE, BEARER, API_KEY, BASIC")
     auth_header_name: Optional[str] = Field(default="Authorization", description="Header name for auth context")
     auth_token: Optional[str] = Field(default=None, description="Secret token or credential")

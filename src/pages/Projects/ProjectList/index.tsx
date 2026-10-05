@@ -191,9 +191,10 @@ export const ProjectList: React.FC = () => {
         {filteredProjects.map((p) => {
           const currentStatus = getProjectStatus(p);
           const currentScore = getProjectScore(p);
+          const hasNoData = p.hasData === false || currentScore === null;
 
           const isCardScanning = currentStatus === 'Scanning';
-          const isVulnerable = currentStatus === 'Needs Attention' || currentScore < 60;
+          const isVulnerable = !isCardScanning && !hasNoData && (currentStatus === 'Needs Attention' || (currentScore !== null && currentScore < 60));
 
           // Status Badge Variant
           let badgeVariant: 'primary' | 'critical' | 'high' | 'neutral' = 'neutral';
@@ -202,6 +203,9 @@ export const ProjectList: React.FC = () => {
           if (isCardScanning) {
             badgeVariant = 'high'; // Uses tertiary orange color scheme
             badgeLabel = 'Scanning';
+          } else if (hasNoData) {
+            badgeVariant = 'neutral';
+            badgeLabel = 'No Assessment';
           } else if (isVulnerable) {
             badgeVariant = 'critical'; // Uses error red color scheme
             badgeLabel = 'Vulnerable';
@@ -265,16 +269,16 @@ export const ProjectList: React.FC = () => {
                         strokeWidth="3"
                       ></path>
                       <path 
-                        className={isVulnerable ? 'text-error' : isCardScanning ? 'text-tertiary' : 'text-primary'}
+                        className={isVulnerable ? 'text-error' : isCardScanning ? 'text-tertiary' : hasNoData ? 'text-outline-variant' : 'text-primary'}
                         d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" 
                         fill="none" 
                         stroke="currentColor" 
-                        strokeDasharray={`${isCardScanning ? 75 : currentScore}, 100`} 
+                        strokeDasharray={`${isCardScanning ? 75 : (currentScore ?? 0)}, 100`}
                         strokeWidth="3"
                       ></path>
                     </svg>
                     <span className={`absolute ${isCardScanning ? 'text-[10px]' : 'text-xs'} font-bold text-on-surface`}>
-                      {isCardScanning ? '...' : currentScore}
+                      {isCardScanning ? '...' : (currentScore === null || currentScore === undefined) ? '--' : currentScore}
                     </span>
                   </div>
                 </div>

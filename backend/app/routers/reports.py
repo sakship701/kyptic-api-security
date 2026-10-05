@@ -1,12 +1,14 @@
 import html
 import re
 from typing import Any, Dict, List
-from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from fastapi.responses import Response, HTMLResponse, JSONResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.database import get_db
+from app.dependencies.auth import get_current_user, verify_project_access
+from app.models.user import User
 from app.services.report_service import ReportService
 
 
@@ -20,7 +22,9 @@ class ReportGenerateRequest(BaseModel):
 
 
 @router.get("/templates")
-def get_report_templates() -> List[Dict[str, Any]]:
+def get_report_templates(
+    user: User = Depends(get_current_user),
+) -> List[Dict[str, Any]]:
     return [
         {
             "id": "t-1",
@@ -64,8 +68,13 @@ def get_report_templates() -> List[Dict[str, Any]]:
 @router.post("/generate")
 def generate_report(
     req: ReportGenerateRequest,
+    request: Request,
+    user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
+    # Enforce project ownership server-side
+    verify_project_access(project_id=req.project_id, request=request, user=user, db=db)
+
     service = ReportService(db)
     try:
         report_type = req.report_type.lower()
@@ -80,7 +89,6 @@ def generate_report(
         elif fmt == "pdf":
             pdf_bytes = service.generate_pdf_report(req.project_id, report_type)
             filename = f"kyptic_report_{req.project_id}_{report_type}.pdf"
-            # Sanitize filename for headers
             safe_filename = re.sub(r"[^a-zA-Z0-9_\-\.]", "_", filename)
             return Response(
                 content=pdf_bytes,
@@ -100,11 +108,13 @@ def generate_report(
 
 @router.get("/download")
 def download_report(
+    request: Request,
     project_id: int = Query(...),
     report_type: str = Query("executive"),
     format: str = Query("pdf"),
+    user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """GET endpoint for downloading reports directly from browser links."""
+    """GET endpoint for downloading reports directly with server-side authentication and project ownership verification."""
     req = ReportGenerateRequest(project_id=project_id, report_type=report_type, format=format)
-    return generate_report(req, db)
+    return generate_report(req, request=request, user=user, db=db)

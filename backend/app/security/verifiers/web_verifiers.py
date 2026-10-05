@@ -221,63 +221,95 @@ class CsrfVerifier(BaseVulnerabilityVerifier):
         auth_context: DastAuthContext,
         params: Optional[Dict[str, Any]] = None,
     ) -> DastProbeResult:
-        if endpoint.method.upper() in ("GET", "HEAD", "OPTIONS"):
+        """
+        Executes evidence-driven CSRF verification requiring the full 5-point evidence chain:
+        1. State-changing HTTP method (POST, PUT, DELETE, PATCH).
+        2. Session/Cookie authentication context.
+        3. Successful execution of a cross-origin probe (untrusted Origin header).
+        4. Absence of anti-CSRF token protection or Origin/Referer validation.
+        5. Proof of actual exploitability (HTTP 2xx response to cross-origin request).
+        Missing SameSite or missing anti-CSRF token alone without successful cross-origin state modification returns INCONCLUSIVE or VERIFIED_SECURE.
+        """
+        method_upper = endpoint.method.upper()
+        if method_upper in ("GET", "HEAD", "OPTIONS"):
             return DastProbeResult(
                 endpoint_id=endpoint.id,
                 probe_type=DastProbeType.BOLA,
                 status=DastVerificationStatus.INCONCLUSIVE,
-                evidence=f"CSRF verification skipped for read-only HTTP method {endpoint.method}.",
+                evidence=f"CSRF verification skipped for safe read-only HTTP method {endpoint.method}.",
             )
 
+        secrets = auth_context.get_secrets_to_redact()
         target_url = f"{base_url.rstrip('/')}/{endpoint.path.lstrip('/')}"
         target_url = re.sub(r"\{[^}]+\}", "1", target_url)
-        secrets = auth_context.get_secrets_to_redact()
 
+        # Rule 1: Non-cookie authentication (Bearer/API Key) is not vulnerable to standard browser cross-origin CSRF
+        if auth_context.auth_type not in ("COOKIE", "SESSION") and auth_context.auth_type != "NONE":
+            return DastProbeResult(
+                endpoint_id=endpoint.id,
+                probe_type=DastProbeType.BOLA,
+                status=DastVerificationStatus.VERIFIED_SECURE,
+                evidence=f"Route relies on explicit '{auth_context.auth_type}' header authentication rather than implicit browser session cookies. Cross-origin browser CSRF is not exploitable.",
+                confidence="HIGH",
+                secrets_to_redact=secrets,
+            )
+
+        # Rule 2: Execute cross-origin probe request with untrusted Origin
+        untrusted_origin = "https://attacker-cross-origin.com"
         try:
-            resp = client.execute_request(url=target_url, method=endpoint.method, auth_context=auth_context, timeout=5.0)
+            resp = client.execute_request(
+                url=target_url,
+                method=endpoint.method,
+                headers={"Origin": untrusted_origin, "Referer": f"{untrusted_origin}/exploit"},
+                auth_context=auth_context,
+                timeout=5.0,
+            )
         except Exception as e:
             return DastProbeResult(
                 endpoint_id=endpoint.id,
                 probe_type=DastProbeType.BOLA,
                 status=DastVerificationStatus.INCONCLUSIVE,
-                evidence=f"CSRF verification request failed: {str(e)}",
+                evidence=f"CSRF cross-origin probe request failed: {str(e)}",
                 secrets_to_redact=secrets,
             )
 
-        headers_lower = {k.lower(): str(v) for k, v in resp.headers.items()}
-        set_cookie = headers_lower.get("set-cookie", "").lower()
-        has_samesite_strict_or_lax = "samesite=strict" in set_cookie or "samesite=lax" in set_cookie
+        headers_lower = {str(k).lower(): str(v).lower() for k, v in (resp.headers or {}).items()}
+        set_cookie = headers_lower.get("set-cookie", "")
+        all_headers_str = " ".join(f"{k}:{v}" for k, v in headers_lower.items())
+        has_samesite_strict_or_lax = "samesite=strict" in set_cookie or "samesite=lax" in set_cookie or "samesite=strict" in all_headers_str or "samesite=lax" in all_headers_str
 
-        # Rule 1: Protected or SameSite enforced
+        # Rule 3: Protected endpoint, rejected origin, or SameSite=Strict/Lax active
         if resp.status_code in (401, 403) or has_samesite_strict_or_lax:
             return DastProbeResult(
                 endpoint_id=endpoint.id,
                 probe_type=DastProbeType.BOLA,
                 status=DastVerificationStatus.VERIFIED_SECURE,
-                evidence="Target route enforces SameSite=Strict/Lax cookie policies or denies unauthenticated state modification.",
+                evidence=f"Target route enforced anti-CSRF protection (HTTP {resp.status_code}) or SameSite cookie restrictions against cross-origin request from '{untrusted_origin}'.",
                 response_status=resp.status_code,
                 confidence="HIGH",
                 secrets_to_redact=secrets,
             )
 
-        # Rule 2: Confirmed unvalidated state-changing request
-        if resp.status_code and 200 <= resp.status_code < 300 and auth_context.auth_type == "COOKIE":
+        # Rule 4: Complete evidence chain confirmed for vulnerable CSRF
+        if resp.status_code and 200 <= resp.status_code < 300 and auth_context.auth_type in ("COOKIE", "SESSION"):
             return DastProbeResult(
                 endpoint_id=endpoint.id,
                 probe_type=DastProbeType.BOLA,
                 status=DastVerificationStatus.VERIFIED_VULNERABLE,
                 severity=FindingSeverity.MEDIUM,
-                evidence=f"State-changing route '{endpoint.method} {endpoint.path}' accepted session cookie without CSRF token validation.",
+                evidence=f"CSRF Confirmed: State-changing route '{endpoint.method} {endpoint.path}' accepted cross-origin request from '{untrusted_origin}' using session cookie without anti-CSRF token or Origin validation (HTTP {resp.status_code}).",
                 response_status=resp.status_code,
+                response_snippet=resp.body_preview,
                 confidence="HIGH",
                 secrets_to_redact=secrets,
             )
 
+        # Rule 5: Ambiguous response (missing token/headers alone without 2xx state modification proof) -> INCONCLUSIVE
         return DastProbeResult(
             endpoint_id=endpoint.id,
             probe_type=DastProbeType.BOLA,
             status=DastVerificationStatus.INCONCLUSIVE,
-            evidence=f"CSRF verification returned HTTP {resp.status_code}. Missing explicit anti-CSRF vulnerability proof.",
+            evidence=f"CSRF verification returned HTTP {resp.status_code}. Missing complete exploitability evidence chain.",
             response_status=resp.status_code,
             confidence="LOW",
             secrets_to_redact=secrets,

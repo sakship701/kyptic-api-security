@@ -68,9 +68,11 @@ class DASTWebScanner(BaseScanner):
             parsed = urllib.parse.urlparse(url)
             scheme = parsed.scheme.lower() if parsed.scheme else ""
             hostname = parsed.hostname.lower() if parsed.hostname else ""
-            port = parsed.port
+            port = parsed.port or (443 if scheme == "https" else (80 if scheme == "http" else None))
             
-            target_scheme, target_host, target_port = target_origin
+            target_scheme, target_host, raw_target_port = target_origin
+            target_port = raw_target_port or (443 if target_scheme == "https" else (80 if target_scheme == "http" else None))
+
             if scheme != target_scheme or port != target_port:
                 return False
                 

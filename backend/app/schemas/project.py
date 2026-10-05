@@ -31,6 +31,15 @@ class ProjectResponse(BaseModel):
     last_ingested_at: datetime | None = None
     ingestion_error: str | None = None
 
+    # Calculated posture & finding metrics
+    score: int | None = None
+    critical: int = 0
+    high: int = 0
+    medium: int = 0
+    low: int = 0
+    total_findings: int = 0
+    has_data: bool = False
+
 
 class ProjectSourceResponse(BaseModel):
     project_id: int

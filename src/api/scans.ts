@@ -1,3 +1,5 @@
+import { getAuthHeaders } from './auth';
+
 export type ScanStatus = 'queued' | 'running' | 'paused' | 'completed' | 'stopped' | 'failed';
 
 export interface ScanApiData {
@@ -17,7 +19,12 @@ const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || 'http://localhost:800
 
 const request = async <T>(path: string, options?: RequestInit): Promise<T> => {
   try {
-    const response = await fetch(`${API_BASE_URL}${path}`, options);
+    const headers = getAuthHeaders(options?.headers as Record<string, string> | undefined);
+    const response = await fetch(`${API_BASE_URL}${path}`, {
+      ...options,
+      headers,
+      credentials: 'include',
+    });
     if (!response.ok) {
       let detail = `The Kyptic backend returned an error (${response.status}).`;
       try {
@@ -48,3 +55,10 @@ export const fetchScan = (scanId: number) => request<ScanApiData>(`/api/scans/${
 export const pauseScan = (scanId: number) => request<ScanApiData>(`/api/scans/${scanId}/pause`, { method: 'POST' });
 export const resumeScan = (scanId: number) => request<ScanApiData>(`/api/scans/${scanId}/resume`, { method: 'POST' });
 export const stopScan = (scanId: number) => request<ScanApiData>(`/api/scans/${scanId}/stop`, { method: 'POST' });
+
+export interface ScanActivityData {
+  date: string;
+  count: number;
+}
+
+export const fetchScanActivity = () => request<ScanActivityData[]>('/api/scans/activity');

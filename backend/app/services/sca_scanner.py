@@ -70,10 +70,11 @@ class SCADependencyScanner(BaseScanner):
                     continue
                 # Strip environment markers and inline comments
                 line = line.split("#")[0].strip().split(";")[0].strip()
-                match = re.match(r"^([a-zA-Z0-9_\-\.]+)\s*==\s*([a-zA-Z0-9_\-\.]+)", line)
+                match = re.match(r"^([a-zA-Z0-9_\-\.]+)\s*(?:==|>=|<=|~=|>|<)?\s*([a-zA-Z0-9_\-\.]*)", line)
                 if match:
                     pkg, ver = match.group(1), match.group(2)
-                    packages.append((pkg, ver))
+                    if pkg:
+                        packages.append((pkg, ver))
         except Exception:
             pass
         return packages
@@ -174,11 +175,11 @@ class SCADependencyScanner(BaseScanner):
         scanner_error_occurred = False
         last_error_msg = ""
 
-        # 1. Process Python manifests using pip-audit where possible
+        # 1. Process Python manifests using pip-audit where possible, with OSV fallback on resolution failure
         for py_file in python_files:
             rel_file = str(py_file.relative_to(target_dir))
+            pip_audit_success = False
 
-            # Attempt pip-audit subprocess if it's a requirements file
             if py_file.name.lower().startswith("requirements"):
                 lookup_attempted = True
                 cmd = [sys.executable, "-m", "pip_audit", "-r", str(py_file), "-f", "json"]
@@ -205,8 +206,8 @@ class SCADependencyScanner(BaseScanner):
                         await asyncio.sleep(0.1)
 
                     if timed_out:
-                        scanner_error_occurred = True
                         last_error_msg = "SCA pip-audit scan timed out after 120 seconds."
+                        scanner_error_occurred = True
                     else:
                         stdout, stderr = proc.communicate(timeout=5)
                 except subprocess.TimeoutExpired:
@@ -219,7 +220,6 @@ class SCADependencyScanner(BaseScanner):
                     except Exception:
                         pass
                 except Exception as ex:
-                    lookup_failed_due_to_network = True
                     last_error_msg = str(ex)
 
                 if not timed_out:
@@ -227,6 +227,7 @@ class SCADependencyScanner(BaseScanner):
                         try:
                             audit_data = json.loads(stdout)
                             if isinstance(audit_data, list):
+                                pip_audit_success = True
                                 for pkg_item in audit_data:
                                     pkg_name = pkg_item.get("name")
                                     pkg_ver = pkg_item.get("version")
@@ -243,49 +244,46 @@ class SCADependencyScanner(BaseScanner):
                                             "file_path": rel_file,
                                         })
                         except Exception as parse_err:
-                            scanner_error_occurred = True
                             last_error_msg = f"Failed to parse pip-audit output: {parse_err}"
                     else:
-                        if any(term in stderr.lower() for term in ("connection", "socket", "http", "network", "timeout", "service")):
-                            lookup_failed_due_to_network = True
-                            last_error_msg = stderr.strip() or "pip-audit failed to reach vulnerability service."
-                        else:
-                            scanner_error_occurred = True
-                            last_error_msg = stderr.strip()
+                        last_error_msg = stderr.strip() or f"pip-audit exited with code {proc.returncode}"
 
-            else:
-                # Python non-requirements (pyproject.toml, Pipfile) -> parse & OSV query
+            # Fallback to direct declared dependency parsing and OSV query if pip-audit failed or for non-requirements files
+            if not pip_audit_success and not timed_out:
                 parsed_pkgs = self._parse_python_requirements(py_file)
                 if parsed_pkgs:
                     lookup_attempted = True
-                    queries = [{"package": {"name": name, "ecosystem": "PyPI"}, "version": ver} for name, ver in parsed_pkgs]
-                    try:
-                        osv_batch_res = self._query_osv_batch(queries)
-                        results_list = osv_batch_res.get("results", [])
-                        for idx, res_item in enumerate(results_list):
-                            pkg_name, pkg_ver = parsed_pkgs[idx]
-                            vulns = res_item.get("vulns", [])
-                            for v in vulns:
-                                vuln_id = v.get("id")
-                                detail = self._query_osv_detail(vuln_id) if vuln_id else None
-                                raw_vulnerabilities.append({
-                                    "package_name": pkg_name,
-                                    "installed_version": pkg_ver,
-                                    "vulnerability_id": vuln_id,
-                                    "aliases": detail.get("aliases", []) if detail else [],
-                                    "summary": detail.get("summary") or detail.get("details") if detail else "Vulnerability detected in dependency.",
-                                    "fix_versions": [ev.get("fixed") for aff in (detail.get("affected", []) if detail else []) for r in aff.get("ranges", []) for ev in r.get("events", []) if ev.get("fixed")],
-                                    "severity_raw": detail.get("database_specific", {}).get("severity") if detail else None,
-                                    "cvss_vector": detail.get("severity", [{}])[0].get("score") if detail and detail.get("severity") else None,
-                                    "ecosystem": "PyPI",
-                                    "file_path": rel_file,
-                                })
-                    except ConnectionError as conn_err:
-                        lookup_failed_due_to_network = True
-                        last_error_msg = str(conn_err)
-                    except Exception as ex:
-                        scanner_error_occurred = True
-                        last_error_msg = str(ex)
+                    queries = [{"package": {"name": name, "ecosystem": "PyPI"}, "version": ver} for name, ver in parsed_pkgs if ver]
+                    if queries:
+                        try:
+                            osv_batch_res = self._query_osv_batch(queries)
+                            results_list = osv_batch_res.get("results", [])
+                            for idx, res_item in enumerate(results_list):
+                                if idx < len(queries):
+                                    pkg_name = queries[idx]["package"]["name"]
+                                    pkg_ver = queries[idx]["version"]
+                                    vulns = res_item.get("vulns", [])
+                                    for v in vulns:
+                                        vuln_id = v.get("id")
+                                        detail = self._query_osv_detail(vuln_id) if vuln_id else None
+                                        raw_vulnerabilities.append({
+                                            "package_name": pkg_name,
+                                            "installed_version": pkg_ver,
+                                            "vulnerability_id": vuln_id,
+                                            "aliases": detail.get("aliases", []) if detail else [],
+                                            "summary": detail.get("summary") or detail.get("details") if detail else "Vulnerability detected in dependency.",
+                                            "fix_versions": [ev.get("fixed") for aff in (detail.get("affected", []) if detail else []) for r in aff.get("ranges", []) for ev in r.get("events", []) if ev.get("fixed")],
+                                            "severity_raw": detail.get("database_specific", {}).get("severity") if detail else None,
+                                            "cvss_vector": detail.get("severity", [{}])[0].get("score") if detail and detail.get("severity") else None,
+                                            "ecosystem": "PyPI",
+                                            "file_path": rel_file,
+                                        })
+                        except ConnectionError as conn_err:
+                            lookup_failed_due_to_network = True
+                            last_error_msg = str(conn_err)
+                        except Exception as ex:
+                            scanner_error_occurred = True
+                            last_error_msg = str(ex)
 
         # 2. Process Node.js manifests safely using parser + OSV batch query
         for node_file in node_files:
@@ -296,38 +294,40 @@ class SCADependencyScanner(BaseScanner):
                 chunk_size = 50
                 for i in range(0, len(parsed_pkgs), chunk_size):
                     chunk = parsed_pkgs[i:i + chunk_size]
-                    queries = [{"package": {"name": name, "ecosystem": "npm"}, "version": ver} for name, ver in chunk]
-                    try:
-                        osv_batch_res = self._query_osv_batch(queries)
-                        results_list = osv_batch_res.get("results", [])
-                        for idx, res_item in enumerate(results_list):
-                            if idx < len(chunk):
-                                pkg_name, pkg_ver = chunk[idx]
-                                vulns = res_item.get("vulns", [])
-                                for v in vulns:
-                                    vuln_id = v.get("id")
-                                    detail = self._query_osv_detail(vuln_id) if vuln_id else None
-                                    raw_vulnerabilities.append({
-                                        "package_name": pkg_name,
-                                        "installed_version": pkg_ver,
-                                        "vulnerability_id": vuln_id,
-                                        "aliases": detail.get("aliases", []) if detail else [],
-                                        "summary": detail.get("summary") or detail.get("details") if detail else "Vulnerability detected in Node dependency.",
-                                        "fix_versions": [ev.get("fixed") for aff in (detail.get("affected", []) if detail else []) for r in aff.get("ranges", []) for ev in r.get("events", []) if ev.get("fixed")],
-                                        "severity_raw": detail.get("database_specific", {}).get("severity") if detail else None,
-                                        "cvss_vector": detail.get("severity", [{}])[0].get("score") if detail and detail.get("severity") else None,
-                                        "ecosystem": "npm",
-                                        "file_path": rel_file,
-                                    })
-                    except ConnectionError as conn_err:
-                        lookup_failed_due_to_network = True
-                        last_error_msg = str(conn_err)
-                    except Exception as ex:
-                        scanner_error_occurred = True
-                        last_error_msg = str(ex)
+                    queries = [{"package": {"name": name, "ecosystem": "npm"}, "version": ver} for name, ver in chunk if ver]
+                    if queries:
+                        try:
+                            osv_batch_res = self._query_osv_batch(queries)
+                            results_list = osv_batch_res.get("results", [])
+                            for idx, res_item in enumerate(results_list):
+                                if idx < len(queries):
+                                    pkg_name = queries[idx]["package"]["name"]
+                                    pkg_ver = queries[idx]["version"]
+                                    vulns = res_item.get("vulns", [])
+                                    for v in vulns:
+                                        vuln_id = v.get("id")
+                                        detail = self._query_osv_detail(vuln_id) if vuln_id else None
+                                        raw_vulnerabilities.append({
+                                            "package_name": pkg_name,
+                                            "installed_version": pkg_ver,
+                                            "vulnerability_id": vuln_id,
+                                            "aliases": detail.get("aliases", []) if detail else [],
+                                            "summary": detail.get("summary") or detail.get("details") if detail else "Vulnerability detected in Node dependency.",
+                                            "fix_versions": [ev.get("fixed") for aff in (detail.get("affected", []) if detail else []) for r in aff.get("ranges", []) for ev in r.get("events", []) if ev.get("fixed")],
+                                            "severity_raw": detail.get("database_specific", {}).get("severity") if detail else None,
+                                            "cvss_vector": detail.get("severity", [{}])[0].get("score") if detail and detail.get("severity") else None,
+                                            "ecosystem": "npm",
+                                            "file_path": rel_file,
+                                        })
+                        except ConnectionError as conn_err:
+                            lookup_failed_due_to_network = True
+                            last_error_msg = str(conn_err)
+                        except Exception as ex:
+                            scanner_error_occurred = True
+                            last_error_msg = str(ex)
 
         # 3. Determine final status
-        if lookup_failed_due_to_network:
+        if lookup_failed_due_to_network and not raw_vulnerabilities:
             final_status = SCAStatus.DATABASE_UNAVAILABLE
         elif scanner_error_occurred and not raw_vulnerabilities:
             final_status = SCAStatus.SCANNER_ERROR
@@ -335,6 +335,8 @@ class SCADependencyScanner(BaseScanner):
             final_status = SCAStatus.SUCCESS
         elif lookup_attempted:
             final_status = SCAStatus.NO_VULNERABILITIES
+        elif scanner_error_occurred:
+            final_status = SCAStatus.SCANNER_ERROR
         else:
             final_status = SCAStatus.NO_MANIFESTS
 

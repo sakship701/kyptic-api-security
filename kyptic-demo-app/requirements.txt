@@ -1,0 +1,4 @@
+fastapi==0.95.2
+requests==2.19.1
+jinja2==2.10
+PyYAML==5.3.1

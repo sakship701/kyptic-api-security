@@ -1,3 +1,5 @@
+import { getAuthHeaders } from './auth';
+
 export interface RiskMapNodeDetailsData {
   vulnName?: string | null;
   owasp?: string | null;
@@ -78,7 +80,10 @@ export const fetchProjectRiskMap = async (
   if (params?.min_risk_score !== undefined) query.append('min_risk_score', String(params.min_risk_score));
 
   const queryString = query.toString() ? `?${query.toString()}` : '';
-  const response = await fetch(`${API_BASE_URL}/api/projects/${projectId}/risk-map${queryString}`);
+  const response = await fetch(`${API_BASE_URL}/api/projects/${projectId}/risk-map${queryString}`, {
+    headers: getAuthHeaders(),
+    credentials: 'include',
+  });
   if (!response.ok) {
     const errText = await response.text();
     throw new Error(`Failed to load Risk Map (${response.status}): ${errText}`);

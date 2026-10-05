@@ -50,13 +50,27 @@ def normalize_semgrep_results(
     target_dir: Path | None = None
 ) -> List[Finding]:
     findings = []
-    results = results_dict.get("results", [])
-    
+    if not isinstance(results_dict, dict):
+        return []
+
+    raw_results = results_dict.get("results")
+    if isinstance(raw_results, dict):
+        results = raw_results.get("results", [])
+    elif isinstance(raw_results, list):
+        results = raw_results
+    else:
+        results = []
+
+    if not isinstance(results, list):
+        return []
+
     for r in results:
+        if not isinstance(r, dict):
+            continue
         check_id = r.get("check_id", "semgrep-rule")
         file_path = r.get("path", "unknown-file")
-        start_line = r.get("start", {}).get("line")
-        end_line = r.get("end", {}).get("line")
+        start_line = r.get("start", {}).get("line") if isinstance(r.get("start"), dict) else None
+        end_line = r.get("end", {}).get("line") if isinstance(r.get("end"), dict) else None
         
         extra = r.get("extra", {})
         message = extra.get("message", "No message provided")
@@ -199,22 +213,41 @@ def normalize_detect_secrets_results(
 ) -> List[Finding]:
     """Convert detect-secrets output into Kyptic Finding models, masking secrets."""
     findings = []
-    results = results_dict.get("results", {})
-    
-    for file_path, matches in results.items():
+    if not isinstance(results_dict, dict):
+        return []
+
+    # Safely unpack detect-secrets output structure
+    # DetectSecretsScanner returns dict with status/results wrapper, which contains an inner "results" dict mapping file paths to match lists.
+    raw_results = results_dict.get("results", results_dict)
+    if isinstance(raw_results, dict) and "results" in raw_results:
+        file_mapping = raw_results.get("results") or {}
+    elif isinstance(raw_results, dict):
+        file_mapping = raw_results
+    else:
+        file_mapping = {}
+
+    if not isinstance(file_mapping, dict):
+        return []
+
+    for file_path, matches in file_mapping.items():
+        if not isinstance(file_path, str) or not isinstance(matches, list):
+            continue
+
         # Resolve full path to read the file lines for code snippet extraction
         full_path = Path(file_path)
         if not full_path.is_absolute() and target_dir:
             full_path = target_dir / file_path
-        
+
         file_lines = []
         if full_path.exists():
             try:
                 file_lines = full_path.read_text(encoding="utf-8", errors="ignore").splitlines()
             except Exception:
                 pass
-                
+
         for m in matches:
+            if not isinstance(m, dict):
+                continue
             line_no = m.get("line_number")
             detector_name = m.get("type", "Secret Detector")
             hashed_secret = m.get("hashed_secret", "")

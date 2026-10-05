@@ -26,7 +26,7 @@ from app.security.vulnerability_registry import VulnerabilityRegistry
 from app.services.cross_validation_engine import CrossValidationEngine
 from app.services.dast_http_client import DastAuthContext, DastHttpClient, redact_secrets
 from app.services.dast_probes import DastProbeEngine, DastVerificationStatus
-from app.services.ssrf_protection import is_ssrf_safe_url
+from app.services.ssrf_protection import is_ssrf_safe_url, is_local_demo_target
 
 
 @dataclass
@@ -42,6 +42,8 @@ class TargetedVerificationContext:
     probe_type: Optional[str]
     hypothesis: str
     source: str
+    parameter: Optional[str] = None
+    test_value: Optional[str] = None
     mapping_confidence: str = "EXACT"
     priority_level: str = "HIGH"
 
@@ -212,6 +214,8 @@ class TargetedVerificationEngine:
             probe_type=probe_type,
             hypothesis=f"Standalone verification of hypothesis {vuln_id} against {req.http_method.upper()} {req.path}.",
             source="STANDALONE",
+            parameter=req.parameter,
+            test_value=req.test_value,
         )
 
         ep_model = ApiEndpoint(
@@ -256,8 +260,9 @@ class TargetedVerificationEngine:
                 safe_to_execute=True,
             )
 
-        # 2. Safety Controls: SSRF & Loopback Protection
-        is_safe, ssrf_reason = is_ssrf_safe_url(ctx.target_url, allow_localhost=False)
+        # 2. Safety Controls: SSRF & Loopback Protection (allowing explicit KYPTIC_LOCAL_DEMO_URL only)
+        is_demo = is_local_demo_target(ctx.target_url)
+        is_safe, ssrf_reason = is_ssrf_safe_url(ctx.target_url, allow_localhost=is_demo)
         if not is_safe:
             return TargetedVerificationResult(
                 finding_id=ctx.finding_id,
@@ -296,11 +301,16 @@ class TargetedVerificationEngine:
 
         try:
             # 4. Instantiate Probe Engine & Execute ONLY the target probe
-            client = DastHttpClient(allow_localhost=False)
+            client = DastHttpClient(allow_localhost=is_demo)
             engine = DastProbeEngine(client=client, base_url=ctx.target_url, auth_context=auth_context)
 
             probe_type = vuln_def.probe_type
             probe_res = None
+            verifier_params: Dict[str, Any] = {}
+            if ctx.parameter:
+                verifier_params["parameter"] = ctx.parameter
+            if ctx.test_value:
+                verifier_params["test_value"] = ctx.test_value
 
             if probe_type in self.verifiers:
                 verifier = self.verifiers[probe_type]
@@ -309,6 +319,7 @@ class TargetedVerificationEngine:
                     client=client,
                     base_url=ctx.target_url,
                     auth_context=auth_context,
+                    params=verifier_params,
                 )
             elif ctx.vulnerability_id in self.verifiers:
                 verifier = self.verifiers[ctx.vulnerability_id]
@@ -317,6 +328,7 @@ class TargetedVerificationEngine:
                     client=client,
                     base_url=ctx.target_url,
                     auth_context=auth_context,
+                    params=verifier_params,
                 )
             elif probe_type == "BOLA":
                 probe_res = engine.probe_bola(endpoint_model)
@@ -354,13 +366,15 @@ class TargetedVerificationEngine:
                 status = TargetedVerificationStatus.INCONCLUSIVE
                 expl = probe_res.evidence or f"Targeted probe yielded inconclusive results for {ctx.vulnerability_id}."
 
-            obs = []
-            if probe_res.response_status:
+            obs = getattr(probe_res, "responses_observed", None) or []
+            if not obs and probe_res.response_status:
                 obs.append({
                     "status_code": probe_res.response_status,
                     "headers": probe_res.response_headers,
                     "body_snippet": probe_res.response_snippet,
                 })
+
+            reqs_count = getattr(probe_res, "requests_attempted", None) or len(obs) or 1
 
             redacted_evidence = redact_secrets(expl, auth_context.get_secrets_to_redact())
 
@@ -377,7 +391,7 @@ class TargetedVerificationEngine:
                 status=status,
                 explanation=redacted_evidence,
                 evidence=redacted_evidence,
-                requests_attempted=len(obs) or 1,
+                requests_attempted=reqs_count,
                 responses_observed=obs,
                 safe_to_execute=True,
                 execution_metadata={

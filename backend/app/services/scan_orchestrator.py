@@ -1,7 +1,10 @@
 import asyncio
+import logging
 import time
 from datetime import datetime
 from typing import Any, Dict, List, Set, Tuple
+
+logger = logging.getLogger(__name__)
 
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
@@ -114,6 +117,8 @@ class ScanOrchestrator:
             if semgrep_path:
                 try:
                     sast_results = await sast_scanner.scan(source_dir)
+                    sast_status = sast_results.get("status", "SUCCESS")
+                    scan.sast_status = sast_status
                     sast_version = sast_results.get("version", "semgrep 1.0.0")
                     sast_findings = normalize_semgrep_results(
                         sast_results,
@@ -126,7 +131,10 @@ class ScanOrchestrator:
                     executed_scanners.append("semgrep")
                     scanner_versions.append(f"semgrep {sast_version}")
                 except Exception as sast_err:
-                    pass
+                    scan.sast_status = "SCANNER_ERROR"
+                    logger.error("SAST scan or normalization error: %s", sast_err, exc_info=True)
+            else:
+                scan.sast_status = "SKIPPED_SCANNER_NOT_INSTALLED"
 
             # 1b. Secret Detection (detect-secrets)
             scan.current_phase = "Running Secret Detection"
@@ -136,6 +144,8 @@ class ScanOrchestrator:
             try:
                 secrets_scanner = DetectSecretsScanner()
                 secrets_results = await secrets_scanner.scan(source_dir)
+                secrets_status = secrets_results.get("status", "SUCCESS")
+                scan.secrets_status = secrets_status
                 secrets_version = secrets_results.get("version", "detect-secrets 1.4.0")
                 secrets_findings = normalize_detect_secrets_results(
                     secrets_results,
@@ -148,7 +158,8 @@ class ScanOrchestrator:
                 executed_scanners.append("detect-secrets")
                 scanner_versions.append(f"detect-secrets {secrets_version}")
             except Exception as sec_err:
-                pass
+                scan.secrets_status = "SCANNER_ERROR"
+                logger.error("Secret detection scan or normalization error: %s", sec_err, exc_info=True)
 
             # 1c. SCA / Dependency Analysis
             scan.current_phase = "Running Dependency Analysis"
@@ -172,6 +183,7 @@ class ScanOrchestrator:
                 executed_scanners.append("sca-dependency")
                 scanner_versions.append(f"sca-dependency {sca_version}")
             except Exception as sca_err:
+                logger.error("SCA dependency scan or normalization error: %s", sca_err, exc_info=True)
                 sca_status = "SCANNER_ERROR"
                 scan.sca_status = sca_status
 
@@ -224,8 +236,11 @@ class ScanOrchestrator:
                         combined_findings.extend(b_res.findings)
                         executed_scanners.append("kyptic-browser-dast")
                         scanner_versions.append("kyptic-browser-dast 1.0.0")
+                        scan.browser_dast_status = "COMPLETED"
+                    else:
+                        scan.browser_dast_status = "NO_VULNERABILITIES"
                 except Exception:
-                    pass
+                    scan.browser_dast_status = "SKIPPED_BROWSER_UNAVAILABLE"
             elif project.source_type == "WEBSITE" and not target_url:
                 scan.status = ScanStatus.FAILED
                 scan.error_message = "Website projects are DAST targets; target URL is missing."

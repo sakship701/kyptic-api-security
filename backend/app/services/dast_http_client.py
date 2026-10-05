@@ -95,13 +95,22 @@ def redact_secrets(content: Any, secrets_to_redact: List[str] | None = None) -> 
 
 def sanitize_headers(headers: Dict[str, str]) -> Dict[str, str]:
     """
-    Filters and redacts sensitive header values for safe logging, display, or evidence capture.
+    Filters and redacts sensitive header values for safe logging, display, or evidence capture while preserving security flags like SameSite.
     """
     sanitized = {}
     for k, v in headers.items():
         k_lower = str(k).lower()
         if k_lower in SENSITIVE_HEADER_KEYS:
-            sanitized[k] = "[REDACTED_SECRET]"
+            val_str = str(v)
+            flags = []
+            if "samesite=strict" in val_str.lower():
+                flags.append("SameSite=Strict")
+            elif "samesite=lax" in val_str.lower():
+                flags.append("SameSite=Lax")
+            if "secure" in val_str.lower():
+                flags.append("Secure")
+            flag_suffix = ("; " + "; ".join(flags)) if flags else ""
+            sanitized[k] = f"[REDACTED_SECRET]{flag_suffix}"
         else:
             sanitized[k] = str(v)
     return sanitized

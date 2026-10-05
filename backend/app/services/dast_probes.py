@@ -17,7 +17,7 @@ from app.services.dast_http_client import (
     sanitize_headers,
 )
 from app.services.finding_normalizer import generate_fingerprint
-from app.services.ssrf_protection import is_ssrf_safe_url
+from app.services.ssrf_protection import is_ssrf_safe_url, is_local_demo_target
 
 
 class DastVerificationStatus(str, Enum):
@@ -78,6 +78,8 @@ class DastProbeResult:
         response_snippet: Optional[str] = None,
         confidence: str = "LOW",
         secrets_to_redact: Optional[List[str]] = None,
+        requests_attempted: Optional[int] = None,
+        responses_observed: Optional[List[Dict[str, Any]]] = None,
     ):
         self.endpoint_id = endpoint_id
         self.probe_type = probe_type
@@ -89,6 +91,8 @@ class DastProbeResult:
         self.response_headers = sanitize_headers(response_headers or {})
         self.response_snippet = redact_secrets(response_snippet[:500], self.secrets_to_redact) if response_snippet else None
         self.confidence = confidence
+        self.requests_attempted = requests_attempted
+        self.responses_observed = responses_observed or []
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -679,7 +683,8 @@ def run_active_dast_probes(
     if not target_url or not project.api_dast_enabled:
         return []
 
-    client = DastHttpClient(allow_localhost=False)
+    is_demo = is_local_demo_target(target_url)
+    client = DastHttpClient(allow_localhost=is_demo)
     auth_ctx = DastAuthContext(
         auth_type=project.api_auth_type or "NONE",
         header_name=project.api_auth_header_name or "Authorization",

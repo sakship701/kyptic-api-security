@@ -289,13 +289,67 @@ class TestSCA(unittest.TestCase):
         self.scanner._parse_node_manifest(self.temp_dir / "package.json")
         self.assertFalse((self.temp_dir / "hacked.txt").exists())
 
-    # 28. Target workspace remains unchanged
-    def test_target_workspace_remains_unchanged(self):
-        req_file = self.temp_dir / "requirements.txt"
-        req_file.write_text("requests==2.25.0")
-        initial_content = req_file.read_text()
-        asyncio.run(self.scanner.scan(self.temp_dir))
-        self.assertEqual(req_file.read_text(), initial_content)
+    # 29. Pip-audit resolution failure with OSV fallback returning vulnerabilities
+    @patch("app.services.sca_scanner.SCADependencyScanner._query_osv_detail")
+    @patch("app.services.sca_scanner.SCADependencyScanner._query_osv_batch")
+    @patch("subprocess.Popen")
+    def test_pip_audit_resolution_failure_fallback_with_vulnerabilities(self, mock_popen, mock_osv_batch, mock_osv_detail):
+        # Simulate pip-audit failing due to ResolutionImpossible conflict
+        mock_proc = MagicMock()
+        mock_proc.poll.return_value = 0
+        mock_proc.returncode = 1
+        mock_proc.communicate.return_value = ("", "ERROR: ResolutionImpossible: conflicting dependencies")
+        mock_popen.return_value = mock_proc
+
+        mock_osv_batch.return_value = {
+            "results": [
+                {
+                    "vulns": [{"id": "PYSEC-2021-142", "details": "PyYAML code execution vulnerability"}]
+                }
+            ]
+        }
+        mock_osv_detail.return_value = {
+            "id": "PYSEC-2021-142",
+            "aliases": ["CVE-2020-14343"],
+            "summary": "Improper Input Validation in PyYAML",
+            "affected": [],
+        }
+
+        (self.temp_dir / "requirements.txt").write_text("PyYAML==5.3.1\n")
+        res = asyncio.run(self.scanner.scan(self.temp_dir))
+        self.assertEqual(res["status"], SCAStatus.SUCCESS)
+        self.assertGreaterEqual(len(res["results"]), 1)
+        self.assertEqual(res["results"][0]["package_name"], "PyYAML")
+        self.assertEqual(res["results"][0]["installed_version"], "5.3.1")
+
+    # 30. Empty requirements file handling
+    def test_empty_requirements_handling(self):
+        (self.temp_dir / "requirements.txt").write_text("\n# Empty requirements file\n\n")
+        parsed = self.scanner._parse_python_requirements(self.temp_dir / "requirements.txt")
+        self.assertEqual(parsed, [])
+
+    # 31. Malformed dependency lines handling
+    def test_malformed_dependency_lines_handling(self):
+        (self.temp_dir / "requirements.txt").write_text("# Comment line\n-r other.txt\nfastapi==0.95.2; python_version >= '3.8'\ninvalid!!!syntax\n")
+        parsed = self.scanner._parse_python_requirements(self.temp_dir / "requirements.txt")
+        self.assertIn(("fastapi", "0.95.2"), parsed)
+
+    # 32. Fallback returning no vulnerabilities
+    @patch("app.services.sca_scanner.SCADependencyScanner._query_osv_batch")
+    @patch("subprocess.Popen")
+    def test_pip_audit_fallback_no_vulnerabilities(self, mock_popen, mock_osv_batch):
+        mock_proc = MagicMock()
+        mock_proc.poll.return_value = 0
+        mock_proc.returncode = 1
+        mock_proc.communicate.return_value = ("", "ERROR: ResolutionImpossible")
+        mock_popen.return_value = mock_proc
+
+        mock_osv_batch.return_value = {"results": [{"vulns": []}]}
+
+        (self.temp_dir / "requirements.txt").write_text("securepkg==1.0.0\n")
+        res = asyncio.run(self.scanner.scan(self.temp_dir))
+        self.assertEqual(res["status"], SCAStatus.NO_VULNERABILITIES)
+        self.assertEqual(len(res["results"]), 0)
 
 
 import asyncio

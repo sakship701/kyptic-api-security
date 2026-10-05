@@ -42,7 +42,21 @@ def setup_test_db():
 @pytest.fixture
 def compliance_project():
     db = TestingSessionLocal()
-    project = Project(name="Compliance Test Project")
+
+    from app.models.user import User
+    from app.services.auth_service import hash_password
+    from app.config import settings
+
+    user = User(
+        email=settings.BOOTSTRAP_OWNER_EMAIL,
+        password_hash=hash_password("Password123!"),
+        is_active=True,
+    )
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+
+    project = Project(name="Compliance Test Project", user_id=user.id)
     db.add(project)
     db.commit()
     db.refresh(project)
@@ -243,8 +257,17 @@ def test_compliance_no_finding_mutation(compliance_project):
 
 
 def test_compliance_api_endpoint(compliance_project):
+    from app.services.auth_service import create_access_token
+    from app.config import settings
+
+    with TestingSessionLocal() as db:
+        token = create_access_token({"user_id": 1, "email": settings.BOOTSTRAP_OWNER_EMAIL}, db=db)
+
     client = TestClient(app)
-    response = client.get(f"/api/v1/projects/{compliance_project}/compliance?framework=PCI_DSS")
+    response = client.get(
+        f"/api/v1/projects/{compliance_project}/compliance?framework=PCI_DSS",
+        headers={"Authorization": f"Bearer {token}"}
+    )
     assert response.status_code == 200
     data = response.json()
     assert "summary" in data

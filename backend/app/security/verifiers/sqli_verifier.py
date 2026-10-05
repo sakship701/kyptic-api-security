@@ -32,14 +32,33 @@ class SqlInjectionVerifier(BaseVulnerabilityVerifier):
         explicit database syntax error detection and baseline-aligned boolean logic comparison.
         Does NOT rely solely on response length differences or generic HTTP 500 status codes.
         """
+        param_name = (params.get("parameter") if params else None) or "id"
+        test_val = (params.get("test_value") if params else None) or "1"
+
         target_url = f"{base_url.rstrip('/')}/{endpoint.path.lstrip('/')}"
         target_url = re.sub(r"\{[^}]+\}", "1", target_url)
         secrets = auth_context.get_secrets_to_redact()
 
+        responses_observed: List[Dict[str, Any]] = []
+
+        def build_url(val: str) -> str:
+            sep = "&" if "?" in target_url else "?"
+            encoded_val = urllib.parse.quote(val)
+            return f"{target_url}{sep}{param_name}={encoded_val}"
+
+        def record_response(resp: DastResponse):
+            responses_observed.append({
+                "status_code": resp.status_code,
+                "headers": resp.headers,
+                "body_snippet": resp.body_preview,
+                "final_url": resp.final_url,
+            })
+
         # Step 1: Baseline Request
         try:
-            base_url_test = f"{target_url}?id=1" if "?" not in target_url else f"{target_url}&id=1"
+            base_url_test = build_url(test_val)
             base_resp = client.execute_request(url=base_url_test, method=endpoint.method, auth_context=auth_context, timeout=5.0)
+            record_response(base_resp)
         except Exception as e:
             return DastProbeResult(
                 endpoint_id=endpoint.id,
@@ -47,16 +66,20 @@ class SqlInjectionVerifier(BaseVulnerabilityVerifier):
                 status=DastVerificationStatus.INCONCLUSIVE,
                 evidence=f"Baseline SQLi request failed: {str(e)}",
                 secrets_to_redact=secrets,
+                requests_attempted=len(responses_observed) or 1,
+                responses_observed=responses_observed,
             )
 
-        # Step 2: True Condition Probe (' AND '1'='1)
-        true_url = f"{target_url}?id=1'%20AND%20'1'='1" if "?" not in target_url else f"{target_url}&id=1'%20AND%20'1'='1"
-        # Step 3: False Condition Probe (' AND '1'='2)
-        false_url = f"{target_url}?id=1'%20AND%20'1'='2" if "?" not in target_url else f"{target_url}&id=1'%20AND%20'1'='2"
+        # Step 2: True Condition Probe (<test_val>' AND '1'='1)
+        true_url = build_url(f"{test_val}' AND '1'='1")
+        # Step 3: False Condition Probe (<test_val>' AND '1'='2)
+        false_url = build_url(f"{test_val}' AND '1'='2")
 
         try:
             true_resp = client.execute_request(url=true_url, method=endpoint.method, auth_context=auth_context, timeout=5.0)
+            record_response(true_resp)
             false_resp = client.execute_request(url=false_url, method=endpoint.method, auth_context=auth_context, timeout=5.0)
+            record_response(false_resp)
         except Exception as e:
             return DastProbeResult(
                 endpoint_id=endpoint.id,
@@ -64,6 +87,8 @@ class SqlInjectionVerifier(BaseVulnerabilityVerifier):
                 status=DastVerificationStatus.INCONCLUSIVE,
                 evidence=f"SQLi test probes failed: {str(e)}",
                 secrets_to_redact=secrets,
+                requests_attempted=len(responses_observed) or 3,
+                responses_observed=responses_observed,
             )
 
         # Explicit SQL database syntax error pattern matching
@@ -76,10 +101,15 @@ class SqlInjectionVerifier(BaseVulnerabilityVerifier):
             "ora-00933: sql command not properly ended",
             "mysql_fetch_array() expects parameter",
             "syntax error in string constant",
+            "unrecognized token",
         ]
 
-        if true_resp.body_preview or false_resp.body_preview:
-            body_check = (true_resp.body_preview or "").lower() + " " + (false_resp.body_preview or "").lower()
+        if base_resp.body_preview or true_resp.body_preview or false_resp.body_preview:
+            body_check = (
+                (base_resp.body_preview or "").lower() + " " +
+                (true_resp.body_preview or "").lower() + " " +
+                (false_resp.body_preview or "").lower()
+            )
             for err in sql_errors:
                 if err in body_check:
                     return DastProbeResult(
@@ -87,11 +117,13 @@ class SqlInjectionVerifier(BaseVulnerabilityVerifier):
                         probe_type=DastProbeType.BOLA,
                         status=DastVerificationStatus.VERIFIED_VULNERABLE,
                         severity=FindingSeverity.CRITICAL,
-                        evidence=f"SQL Injection confirmed: Server returned database syntax error pattern ('{err}') when probe payload was injected.",
+                        evidence=f"SQL Injection confirmed: Server returned database syntax error pattern ('{err}') when probe payload was injected into parameter '{param_name}'.",
                         response_status=true_resp.status_code,
                         response_snippet=true_resp.body_preview,
                         confidence="HIGH",
                         secrets_to_redact=secrets,
+                        requests_attempted=len(responses_observed),
+                        responses_observed=responses_observed,
                     )
 
         # Baseline vs True vs False Boolean Logic Evaluation
@@ -112,11 +144,13 @@ class SqlInjectionVerifier(BaseVulnerabilityVerifier):
                 probe_type=DastProbeType.BOLA,
                 status=DastVerificationStatus.VERIFIED_VULNERABLE,
                 severity=FindingSeverity.CRITICAL,
-                evidence="SQL Injection confirmed: Baseline & True SQL probes returned valid data, whereas False SQL probe failed/returned empty dataset.",
+                evidence=f"SQL Injection confirmed: Baseline & True SQL probes returned valid data on parameter '{param_name}', whereas False SQL probe failed/returned empty dataset.",
                 response_status=true_resp.status_code,
                 response_snippet=true_resp.body_preview,
                 confidence="HIGH",
                 secrets_to_redact=secrets,
+                requests_attempted=len(responses_observed),
+                responses_observed=responses_observed,
             )
 
         # Generic HTTP 500 without database error pattern is ambiguous -> INCONCLUSIVE
@@ -129,6 +163,8 @@ class SqlInjectionVerifier(BaseVulnerabilityVerifier):
                 response_status=true_resp.status_code,
                 confidence="LOW",
                 secrets_to_redact=secrets,
+                requests_attempted=len(responses_observed),
+                responses_observed=responses_observed,
             )
 
         # Identical responses across baseline, true, and false probes -> VERIFIED_SECURE
@@ -137,18 +173,22 @@ class SqlInjectionVerifier(BaseVulnerabilityVerifier):
                 endpoint_id=endpoint.id,
                 probe_type=DastProbeType.BOLA,
                 status=DastVerificationStatus.VERIFIED_SECURE,
-                evidence="Tested query parameter with boolean logic SQL payloads. No database error syntax or boolean differentials observed.",
+                evidence=f"Tested query parameter '{param_name}' with boolean logic SQL payloads. No database error syntax or boolean differentials observed.",
                 response_status=true_resp.status_code,
                 confidence="HIGH",
                 secrets_to_redact=secrets,
+                requests_attempted=len(responses_observed),
+                responses_observed=responses_observed,
             )
 
         return DastProbeResult(
             endpoint_id=endpoint.id,
             probe_type=DastProbeType.BOLA,
             status=DastVerificationStatus.INCONCLUSIVE,
-            evidence=f"SQLi verification inconclusive. Baseline HTTP {base_resp.status_code}, True HTTP {true_resp.status_code}, False HTTP {false_resp.status_code}.",
+            evidence=f"SQLi verification inconclusive on parameter '{param_name}'. Baseline HTTP {base_resp.status_code}, True HTTP {true_resp.status_code}, False HTTP {false_resp.status_code}.",
             response_status=true_resp.status_code,
             confidence="LOW",
             secrets_to_redact=secrets,
+            requests_attempted=len(responses_observed),
+            responses_observed=responses_observed,
         )

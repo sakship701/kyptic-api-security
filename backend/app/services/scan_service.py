@@ -72,9 +72,13 @@ async def _run_scan(scan_id: int) -> None:
 
 
 def start_scan_task(scan_id: int) -> None:
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return
     existing_task = _scan_tasks.get(scan_id)
     if existing_task is None or existing_task.done():
-        _scan_tasks[scan_id] = asyncio.create_task(_run_scan(scan_id))
+        _scan_tasks[scan_id] = loop.create_task(_run_scan(scan_id))
 
 
 def stop_scan_task(scan_id: int) -> None:
@@ -84,6 +88,10 @@ def stop_scan_task(scan_id: int) -> None:
 
 
 def resume_pending_scans() -> None:
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return
     db = SessionLocal()
     try:
         pending_scan_ids = db.scalars(

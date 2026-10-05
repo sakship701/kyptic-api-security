@@ -1,4 +1,5 @@
 import ipaddress
+import os
 import socket
 import urllib.parse
 from typing import List, Tuple
@@ -108,3 +109,32 @@ def is_ssrf_safe_url(url: str, allow_localhost: bool = False) -> Tuple[bool, str
             return False, f"Destination IP address '{ip_obj}' resolves to a forbidden private or restricted network range."
 
     return True, "URL is SSRF safe."
+
+
+def is_local_demo_target(url: str) -> bool:
+    """
+    Validates if a given target URL matches the explicitly configured KYPTIC_LOCAL_DEMO_URL environment setting.
+    This provides a deterministic, narrowly scoped safety exception for the local demo target without disabling global SSRF protection.
+    """
+    local_demo_env = (os.getenv("KYPTIC_LOCAL_DEMO_URL") or "http://localhost:8001").strip().lower()
+    if not local_demo_env:
+        return False
+
+    try:
+        demo_parsed = urllib.parse.urlparse(local_demo_env)
+        target_parsed = urllib.parse.urlparse((url or "").strip().lower())
+
+        demo_scheme = demo_parsed.scheme
+        demo_host = demo_parsed.hostname
+        demo_port = demo_parsed.port or (443 if demo_scheme == "https" else 80)
+
+        target_scheme = target_parsed.scheme
+        target_host = target_parsed.hostname
+        target_port = target_parsed.port or (443 if target_scheme == "https" else 80)
+
+        # Allow localhost / 127.0.0.1 equivalence for demo host
+        hosts_match = (demo_host == target_host) or (demo_host in ("localhost", "127.0.0.1") and target_host in ("localhost", "127.0.0.1"))
+
+        return (demo_scheme == target_scheme) and hosts_match and (demo_port == target_port)
+    except Exception:
+        return False

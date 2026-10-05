@@ -7,12 +7,15 @@ import Button from '../../components/ui/Button';
 import {
   fetchApiEndpoints,
   fetchApiSecuritySummary,
+  fetchDastConfig,
   ingestOpenApi,
   analyzeApiSecurity,
   runDastActiveScan,
   type ApiEndpointData,
   type ApiSecuritySummaryData,
+  type DastTargetConfigData,
 } from '../../api/api_security';
+import DastConfigModal from '../../components/dast/DastConfigModal';
 
 export const ApiSecurityDashboard: React.FC = () => {
   const { projects, activeProjectId, setActiveProjectId } = useApp();
@@ -23,6 +26,8 @@ export const ApiSecurityDashboard: React.FC = () => {
   const [summary, setSummary] = useState<ApiSecuritySummaryData | null>(null);
   const [endpoints, setEndpoints] = useState<ApiEndpointData[]>([]);
   const [selectedEndpoint, setSelectedEndpoint] = useState<ApiEndpointData | null>(null);
+  const [dastConfig, setDastConfig] = useState<DastTargetConfigData | null>(null);
+  const [isDastConfigOpen, setIsDastConfigOpen] = useState<boolean>(false);
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [isAnalyzing, setIsAnalyzing] = useState<boolean>(false);
   const [isDastRunning, setIsDastRunning] = useState<boolean>(false);
@@ -53,12 +58,14 @@ export const ApiSecurityDashboard: React.FC = () => {
     setIsLoading(true);
     setErrorMsg(null);
     try {
-      const [summaryRes, endpointsRes] = await Promise.all([
+      const [summaryRes, endpointsRes, dastConfigRes] = await Promise.all([
         fetchApiSecuritySummary(projId).catch(() => null),
         fetchApiEndpoints(projId).catch(() => []),
+        fetchDastConfig(projId).catch(() => null),
       ]);
       setSummary(summaryRes);
       setEndpoints(endpointsRes);
+      setDastConfig(dastConfigRes);
     } catch (err: any) {
       setErrorMsg(err.message || 'Failed to load API security data.');
     } finally {
@@ -195,8 +202,28 @@ export const ApiSecurityDashboard: React.FC = () => {
             <p className="text-on-surface-variant text-body-md max-w-3xl">
               Automated API endpoint discovery, OpenAPI specification analysis, static security auditing (BOLA API1, Auth API2, Data Exposure API3, Rate Limit API4, Mass Assignment API6), and dynamic DAST active verification probes with deterministic finding correlation.
             </p>
+            {dastConfig && (
+              <div className="flex flex-wrap items-center gap-3 mt-3 text-xs font-mono">
+                <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-surface-container-high border border-outline-variant">
+                  <span className="material-symbols-outlined text-sm text-tertiary">bolt</span>
+                  <span className="text-on-surface-variant">DAST Testing:</span>
+                  <span className={`font-semibold ${dastConfig.api_dast_enabled ? 'text-success' : 'text-error'}`}>
+                    {dastConfig.api_dast_enabled ? 'ENABLED' : 'DISABLED'}
+                  </span>
+                </div>
+
+                <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-surface-container-high border border-outline-variant">
+                  <span className="material-symbols-outlined text-sm text-on-surface-variant">link</span>
+                  <span className="text-on-surface-variant">Target URL:</span>
+                  <span className="text-white font-medium">
+                    {dastConfig.api_target_url || 'Not Configured'}
+                  </span>
+                </div>
+              </div>
+            )}
+
             {summary?.last_dast_scan_status && (
-              <div className="flex items-center gap-2 mt-3 text-xs text-on-surface-variant font-mono">
+              <div className="flex items-center gap-2 mt-2 text-xs text-on-surface-variant font-mono">
                 <span className="material-symbols-outlined text-sm text-primary">history</span>
                 <span>Last DAST Active Verification:</span>
                 <span className={`font-semibold ${summary.last_dast_scan_status === 'completed' ? 'text-success' : summary.last_dast_scan_status === 'failed' ? 'text-error' : 'text-warning'}`}>
@@ -226,6 +253,15 @@ export const ApiSecurityDashboard: React.FC = () => {
                 ))}
               </select>
             </div>
+
+            <Button
+              variant="secondary"
+              onClick={() => setIsDastConfigOpen(true)}
+              className="flex items-center gap-2 border border-tertiary/50 text-white hover:bg-tertiary/10"
+            >
+              <span className="material-symbols-outlined text-sm text-tertiary">tune</span>
+              Configure DAST Target
+            </Button>
 
             <Button
               variant="secondary"
@@ -756,6 +792,14 @@ export const ApiSecurityDashboard: React.FC = () => {
           </GlassPanel>
         </div>
       )}
+
+      {/* DAST Target Configuration Modal */}
+      <DastConfigModal
+        isOpen={isDastConfigOpen}
+        projectId={activeNumId}
+        onClose={() => setIsDastConfigOpen(false)}
+        onSaved={() => void loadApiData(activeNumId)}
+      />
     </div>
   );
 };
