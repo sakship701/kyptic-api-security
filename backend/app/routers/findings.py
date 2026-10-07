@@ -23,6 +23,7 @@ router = APIRouter(prefix="/api", tags=["findings"])
 def list_findings(
     severity: FindingSeverity | None = None,
     finding_status: FindingStatus | None = None,
+    project_id: int | None = None,
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> list[Finding]:
@@ -35,9 +36,16 @@ def list_findings(
     if not user_project_ids:
         return []
 
+    if project_id is not None:
+        if project_id not in user_project_ids:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
+        target_project_ids = [project_id]
+    else:
+        target_project_ids = user_project_ids
+
     query = (
         select(Finding)
-        .where(Finding.project_id.in_(user_project_ids))
+        .where(Finding.project_id.in_(target_project_ids))
         .order_by(Finding.created_at.desc())
     )
     if severity is not None:
@@ -46,6 +54,7 @@ def list_findings(
         query = query.where(Finding.status == finding_status)
 
     return list(db.scalars(query).all())
+
 
 
 @router.get("/findings/summary")

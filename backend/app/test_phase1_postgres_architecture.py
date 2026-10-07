@@ -98,8 +98,9 @@ def test_get_secret_safe_url():
 
 # 2. Test production database protection check
 def test_verify_test_db_isolation():
-    with pytest.raises(RuntimeError, match="SECURITY ERROR"):
-        verify_test_db_isolation(settings.DATABASE_URL)
+    live_url = "postgresql+psycopg2://kyptic:kyptic_dev_pass@localhost:5432/kyptic_db"
+    with pytest.raises(RuntimeError, match="SECURITY"):
+        verify_test_db_isolation(live_url)
 
     # Isolated test database URL should pass
     verify_test_db_isolation("sqlite:///:memory:")

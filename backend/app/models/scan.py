@@ -34,8 +34,8 @@ class Scan(Base):
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # Scanner details
-    scanner: Mapped[str | None] = mapped_column(String(50), nullable=True)
-    scanner_version: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    scanner: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    scanner_version: Mapped[str | None] = mapped_column(String(255), nullable=True)
     sca_status: Mapped[str | None] = mapped_column(String(50), nullable=True)
     dast_status: Mapped[str | None] = mapped_column(String(50), nullable=True)
     duration: Mapped[float | None] = mapped_column(nullable=True)

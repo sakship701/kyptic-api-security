@@ -45,6 +45,9 @@ class Finding(Base):
         nullable=False,
     )
     cvss: Mapped[float | None] = mapped_column(Numeric(3, 1), nullable=True)
+    cvss_vector: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    cvss_source: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    cvss_version: Mapped[str | None] = mapped_column(String(20), nullable=True)
     category: Mapped[str] = mapped_column(String(255), nullable=False)
     file_path: Mapped[str] = mapped_column(String(500), nullable=False)
     line_number: Mapped[int | None] = mapped_column(Integer, nullable=True)

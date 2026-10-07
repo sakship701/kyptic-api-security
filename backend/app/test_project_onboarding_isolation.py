@@ -10,6 +10,9 @@ from app.models.project import Project
 from app.models.scan import Scan, ScanStatus
 from app.models.finding import Finding
 
+from app.dependencies.auth import get_current_user
+from app.models.user import User
+
 # Setup isolated in-memory SQLite database for testing
 SQLALCHEMY_TEST_DATABASE_URL = "sqlite:///:memory:"
 test_engine = create_engine(
@@ -28,24 +31,54 @@ def override_get_db():
         db.close()
 
 
-app.dependency_overrides[get_db] = override_get_db
-client = TestClient(app)
+def override_get_current_user():
+    db = TestingSessionLocal()
+    user = db.query(User).filter(User.email == "test_isolation@kyptic.security").first()
+    if not user:
+        user = User(
+            email="test_isolation@kyptic.security",
+            full_name="Test Isolation User",
+            password_hash="hashed",
+            is_active=True,
+        )
+        db.add(user)
+        db.commit()
+        db.refresh(user)
+    db.close()
+    return user
+
+
+@pytest.fixture
+def client():
+    with TestClient(app) as c:
+        yield c
 
 
 @pytest.fixture(autouse=True)
 def setup_test_db():
+    app.dependency_overrides[get_db] = override_get_db
+    app.dependency_overrides[get_current_user] = override_get_current_user
     Base.metadata.create_all(bind=test_engine)
     db = TestingSessionLocal()
     db.query(Finding).delete()
     db.query(Scan).delete()
     db.query(Project).delete()
+    db.query(User).delete()
+    user = User(
+        email="test_isolation@kyptic.security",
+        full_name="Test Isolation User",
+        password_hash="hashed",
+        is_active=True,
+    )
+    db.add(user)
     db.commit()
     db.close()
     yield
     Base.metadata.drop_all(bind=test_engine)
+    app.dependency_overrides.clear()
 
 
-def test_new_project_creation_isolation_from_existing_projects():
+def test_new_project_creation_isolation_from_existing_projects(client):
     # 1. Create an existing project ("Gateway Microservice" Java/Spring)
     existing_res = client.post(
         "/api/projects",
@@ -97,7 +130,7 @@ def test_new_project_creation_isolation_from_existing_projects():
     assert proj2["technology"] == "Node.js"
 
 
-def test_zip_ingestion_belongs_only_to_new_project(tmp_path):
+def test_zip_ingestion_belongs_only_to_new_project(client, tmp_path):
     # Create project 1
     p1 = client.post("/api/projects", json={"name": "Project One", "technology": "Go"}).json()
     # Create project 2
@@ -119,7 +152,7 @@ def test_zip_ingestion_belongs_only_to_new_project(tmp_path):
     assert p1_source["status"] == "NOT_INGESTED"
 
 
-def test_onboarding_wizard_flows_and_payload_isolation():
+def test_onboarding_wizard_flows_and_payload_isolation(client):
     """Regression test covering wizard flow specifications (1-11):
 
     1. Intelligent Scan skips Advanced Security Configuration.

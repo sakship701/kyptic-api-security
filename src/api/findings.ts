@@ -70,8 +70,9 @@ const request = async <T>(path: string, options?: RequestInit): Promise<T> => {
   }
 };
 
-export const fetchFindings = (severity?: string, status?: string) => {
+export const fetchFindings = (projectId?: string | number, severity?: string, status?: string) => {
   const params = new URLSearchParams();
+  if (projectId != null && projectId !== '') params.append('project_id', String(projectId));
   if (severity) params.append('severity', severity);
   if (status) params.append('finding_status', status);
   const query = params.toString() ? `?${params.toString()}` : '';

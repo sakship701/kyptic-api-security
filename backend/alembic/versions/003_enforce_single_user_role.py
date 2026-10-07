@@ -21,7 +21,20 @@ depends_on: Union[str, Sequence[str], None] = None
 def upgrade() -> None:
     # Kyptic operates strictly on ONE application role: User.
     # We ensure is_superuser defaults to False across any existing records.
-    op.execute("UPDATE users SET is_superuser = 0 WHERE is_superuser IS NULL OR is_superuser != 0")
+    users = sa.table(
+        'users',
+        sa.column('is_superuser', sa.Boolean())
+    )
+    op.execute(
+        users.update()
+        .where(
+            sa.or_(
+                users.c.is_superuser.is_(None),
+                users.c.is_superuser.is_(True),
+            )
+        )
+        .values(is_superuser=False)
+    )
 
 
 def downgrade() -> None:

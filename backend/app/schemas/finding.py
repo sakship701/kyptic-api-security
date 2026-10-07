@@ -28,6 +28,9 @@ class FindingResponse(BaseModel):
     description: str
     severity: FindingSeverity
     cvss: float | None = None
+    cvss_vector: str | None = None
+    cvss_source: str | None = None
+    cvss_version: str | None = None
     category: str
     file_path: str
     line_number: int | None

@@ -108,14 +108,11 @@ def normalize_semgrep_results(
         elif cwe:
             category = cwe.split(":")[0]
             
-        cvss_map = {
-            FindingSeverity.CRITICAL: 9.0,
-            FindingSeverity.HIGH: 7.5,
-            FindingSeverity.MEDIUM: 5.0,
-            FindingSeverity.LOW: 2.5,
-            FindingSeverity.INFO: 0.0
-        }
-        cvss = cvss_map.get(severity, 0.0)
+        # Authoritative CVSS score or None if unavailable (never fabricate)
+        raw_cvss = extra.get("metadata", {}).get("cvss")
+        raw_vec = extra.get("metadata", {}).get("cvss_vector") or extra.get("metadata", {}).get("cvss_v3")
+        src_hint = "Semgrep Rule Metadata" if (raw_cvss is not None or raw_vec) else None
+        cvss, cvss_vector, cvss_source, cvss_version = parse_cvss_provenance(raw_cvss, raw_vector=raw_vec, source_hint=src_hint)
 
         fingerprint = generate_fingerprint(
             project_id=project_id,
@@ -133,6 +130,9 @@ def normalize_semgrep_results(
             description=message,
             severity=severity,
             cvss=cvss,
+            cvss_vector=cvss_vector,
+            cvss_source=cvss_source,
+            cvss_version=cvss_version,
             category=category,
             file_path=file_path,
             line_number=start_line,
@@ -271,15 +271,13 @@ def normalize_detect_secrets_results(
             # Other tokens/passwords -> HIGH
             # Generic/entropy -> MEDIUM
             severity = FindingSeverity.HIGH
-            cvss = 8.1
+            cvss = None
             
             detector_lower = detector_name.lower()
             if "private key" in detector_lower or "privatekey" in detector_lower or "ssh" in detector_lower:
                 severity = FindingSeverity.CRITICAL
-                cvss = 9.5
             elif "entropy" in detector_lower:
                 severity = FindingSeverity.MEDIUM
-                cvss = 5.5
             
             # Set category
             category = "Secrets Exposure"
@@ -309,7 +307,10 @@ def normalize_detect_secrets_results(
                 title=title,
                 description=description,
                 severity=severity,
-                cvss=cvss,
+                cvss=None,
+                cvss_vector=None,
+                cvss_source=None,
+                cvss_version=None,
                 category=category,
                 file_path=file_path,
                 line_number=line_no,
@@ -351,12 +352,47 @@ def parse_cvss_score(cvss_input: Any) -> float | None:
     if isinstance(cvss_input, (int, float)):
         return float(cvss_input)
     if isinstance(cvss_input, str):
-        # Check if it's a numeric string like "7.5"
         try:
             return float(cvss_input)
         except ValueError:
             pass
     return None
+
+
+def parse_cvss_provenance(
+    cvss_input: Any,
+    raw_vector: str | None = None,
+    source_hint: str | None = None,
+) -> tuple[float | None, str | None, str | None, str | None]:
+    """
+    Parses float score, vector string, source name, and version from scanner output.
+    Returns (score, vector, source, version).
+    If no authoritative CVSS score is present, returns (None, None, None, None).
+    Never fabricates missing vectors, sources, or versions.
+    """
+    if cvss_input is None and not raw_vector:
+        return None, None, None, None
+
+    score: float | None = parse_cvss_score(cvss_input)
+    vector: str | None = raw_vector if (raw_vector and isinstance(raw_vector, str) and raw_vector.strip().startswith("CVSS:")) else None
+    source: str | None = source_hint if (score is not None or vector is not None) else None
+    version: str | None = None
+
+    if score is None and isinstance(cvss_input, str) and cvss_input.strip().startswith("CVSS:"):
+        vector = cvss_input.strip()
+
+    if score is None and not vector:
+        return None, None, None, None
+
+    if vector:
+        if "3.1" in vector:
+            version = "3.1"
+        elif "3.0" in vector:
+            version = "3.0"
+        elif "2.0" in vector:
+            version = "2.0"
+
+    return score, vector, source, version
 
 
 def normalize_sca_results(
@@ -394,7 +430,10 @@ def normalize_sca_results(
         severity = normalize_sca_severity(severity_raw)
         
         # Authoritative CVSS score or None (NEVER fabricate)
-        cvss = parse_cvss_score(r.get("cvss_score")) or parse_cvss_score(r.get("cvss"))
+        raw_cvss_score = r.get("cvss_score") or r.get("cvss")
+        raw_vec = r.get("cvss_vector")
+        src_hint = r.get("cvss_source") or ("OSV / NVD Advisory" if (raw_cvss_score is not None or raw_vec) else None)
+        cvss, cvss_vector, cvss_source, cvss_version = parse_cvss_provenance(raw_cvss_score, raw_vector=raw_vec, source_hint=src_hint)
 
         title = f"Vulnerable Dependency: {pkg_name} ({display_vuln_id})"
         description = (
@@ -428,6 +467,9 @@ def normalize_sca_results(
             description=description,
             severity=severity,
             cvss=cvss,
+            cvss_vector=cvss_vector,
+            cvss_source=cvss_source,
+            cvss_version=cvss_version,
             category="Dependency Vulnerability",
             file_path=file_path,
             line_number=None,
@@ -465,7 +507,11 @@ def normalize_dast_results(
         severity_raw = r.get("severity", "MEDIUM")
         severity = normalize_sca_severity(severity_raw)
         
-        cvss = parse_cvss_score(r.get("cvss_score")) or parse_cvss_score(r.get("cvss"))
+        raw_cvss_score = r.get("cvss_score") or r.get("cvss")
+        raw_vec = r.get("cvss_vector")
+        src_hint = r.get("cvss_source") or ("DAST Scanner Metadata" if (raw_cvss_score is not None or raw_vec) else None)
+        cvss, cvss_vector, cvss_source, cvss_version = parse_cvss_provenance(raw_cvss_score, raw_vector=raw_vec, source_hint=src_hint)
+
         category = r.get("category", "A05:2021-Security Misconfiguration")
         url_path = r.get("url", "web-target")
         evidence_snippet = r.get("evidence_snippet", f"Target URL: {url_path}")
@@ -486,6 +532,9 @@ def normalize_dast_results(
             description=summary,
             severity=severity,
             cvss=cvss,
+            cvss_vector=cvss_vector,
+            cvss_source=cvss_source,
+            cvss_version=cvss_version,
             category=category[:255] if category else "Security Misconfiguration",
             file_path=str(url_path)[:500],
             line_number=None,

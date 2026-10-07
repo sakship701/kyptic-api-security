@@ -19,8 +19,42 @@ def get_secret_safe_url(url: str) -> str:
     return re.sub(r"://([^:]+):([^@]+)@", r"://\1:****@", url)
 
 
+LIVE_DB_NAMES = {"kyptic_db", "kyptic.db"}
+
+
+def is_live_database_url(url: str) -> bool:
+    """Check if a database URL targets the live application database (kyptic_db or kyptic.db)."""
+    if not url:
+        return False
+    cleaned = url.split("?")[0].rstrip("/\\")
+    if "sqlite" in cleaned:
+        db_name = Path(cleaned).name.lower()
+        return db_name == "kyptic.db"
+    else:
+        db_name = cleaned.split("/")[-1].lower()
+        return db_name in LIVE_DB_NAMES
+
+
+def verify_test_db_isolation(test_db_url: str) -> None:
+    """
+    Safety check ensuring tests do NOT execute against the production/dev database.
+    Prevents accidental database wiping or mutation.
+    """
+    if not test_db_url:
+        raise ValueError("Database URL for test is not configured.")
+
+    if is_live_database_url(test_db_url):
+        raise RuntimeError(
+            f"SECURITY ISOLATION ERROR: Refusing to execute tests against live/production application database ({get_secret_safe_url(test_db_url)}). "
+            "Tests MUST use an isolated test database (e.g. TEST_DATABASE_URL=postgresql+psycopg2://kyptic:kyptic_dev_pass@localhost:5432/kyptic_test_db)!"
+        )
+
+
 def create_db_engine(db_url: str):
     """Create engine configured appropriately for SQLite or PostgreSQL."""
+    if "PYTEST_CURRENT_TEST" in os.environ or os.getenv("TESTING", "").lower() in ("true", "1", "yes"):
+        verify_test_db_isolation(db_url)
+
     if db_url.startswith("sqlite"):
         return create_engine(
             db_url,
@@ -49,22 +83,6 @@ def get_db() -> Generator[Session, None, None]:
         yield db
     finally:
         db.close()
-
-
-def verify_test_db_isolation(test_db_url: str) -> None:
-    """
-    Safety check ensuring tests do NOT execute against the production/dev database.
-    Prevents accidental database wiping or mutation.
-    """
-    prod_url = settings.DATABASE_URL
-    if not test_db_url:
-        raise ValueError("TEST_DATABASE_URL is not configured.")
-
-    if test_db_url == prod_url:
-        raise RuntimeError(
-            f"SECURITY ERROR: TEST_DATABASE_URL matches production DATABASE_URL ({get_secret_safe_url(prod_url)}). "
-            "Tests must be executed against a separate test database!"
-        )
 
 
 def validate_db_connection() -> bool:

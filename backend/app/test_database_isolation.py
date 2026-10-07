@@ -50,3 +50,30 @@ def test_test_db_operations_do_not_affect_production_db():
         finally:
             dev_session.close()
             dev_engine.dispose()
+
+
+def test_safety_guard_refuses_live_postgres_database():
+    """
+    Security Guard Test:
+    Proves that verify_test_db_isolation and create_db_engine immediately raise
+    RuntimeError if any test attempts to target the live application database 'kyptic_db'.
+    """
+    import pytest
+    from app.database import verify_test_db_isolation, create_db_engine, is_live_database_url
+
+    live_postgres_url = "postgresql+psycopg2://kyptic:kyptic_dev_pass@localhost:5432/kyptic_db"
+    live_sqlite_url = r"sqlite:///C:\kyptic-api-security\backend\kyptic.db"
+
+    assert is_live_database_url(live_postgres_url) is True
+    assert is_live_database_url(live_sqlite_url) is True
+    assert is_live_database_url("postgresql+psycopg2://kyptic:kyptic_dev_pass@localhost:5432/kyptic_test_db") is False
+    assert is_live_database_url(r"sqlite:///C:\kyptic-api-security\backend\test_kyptic.db") is False
+
+    with pytest.raises(RuntimeError, match="SECURITY ISOLATION ERROR"):
+        verify_test_db_isolation(live_postgres_url)
+
+    with pytest.raises(RuntimeError, match="SECURITY ISOLATION ERROR"):
+        verify_test_db_isolation(live_sqlite_url)
+
+    with pytest.raises(RuntimeError, match="SECURITY ISOLATION ERROR"):
+        create_db_engine(live_postgres_url)

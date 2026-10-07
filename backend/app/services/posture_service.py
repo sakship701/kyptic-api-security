@@ -1,4 +1,5 @@
 from typing import Any, Dict, List, Optional, Tuple
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.finding import Finding, FindingSeverity
@@ -82,8 +83,24 @@ def get_project_posture(db: Session, project_id: int) -> Dict[str, Any]:
     }
 
 
-def get_global_posture(db: Session) -> Dict[str, Any]:
-    findings = db.query(Finding).all()
+def get_global_posture(db: Session, user_id: int | None = None) -> Dict[str, Any]:
+    if user_id is not None:
+        user_project_ids = list(
+            db.scalars(
+                select(Project.id).where(Project.user_id == user_id)
+            ).all()
+        )
+        if not user_project_ids:
+            findings = []
+        else:
+            findings = list(
+                db.scalars(
+                    select(Finding).where(Finding.project_id.in_(user_project_ids))
+                ).all()
+            )
+    else:
+        findings = db.query(Finding).all()
+
     if not findings:
         return {
             "project_id": None,

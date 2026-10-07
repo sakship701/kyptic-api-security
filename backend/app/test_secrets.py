@@ -175,7 +175,7 @@ class TestSecretsEngine(unittest.TestCase):
         self.assertEqual(finding.scanner_name, "detect-secrets")
         self.assertEqual(finding.scanner_version, "1.5.0")
         self.assertEqual(finding.severity, FindingSeverity.CRITICAL)  # PrivateKeyDetector -> CRITICAL
-        self.assertEqual(finding.cvss, 9.5)
+        self.assertIsNone(finding.cvss)
         
         # Test fingerprint stability
         fp1 = finding.fingerprint

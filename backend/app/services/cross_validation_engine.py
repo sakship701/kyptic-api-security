@@ -2,6 +2,7 @@ from typing import Dict, List, Set, Tuple
 from sqlalchemy.orm import Session
 
 from app.models.finding import Finding, FindingSource
+from app.services.confidence_service import ConfidenceService
 
 
 def normalize_endpoint_path(path: str) -> Tuple[str, str]:
@@ -283,51 +284,7 @@ class CrossValidationEngine:
                 for ci in correlated_items
             )
 
-            # 3d. Base Confidence Score
-            if is_active_dast_probe:
-                base_score = 85
-            elif is_generic_web_dast:
-                base_score = 70
-            elif item["source"] == "api_security":
-                base_score = 65
-            elif item["source"] in {"sast", "secrets", "sca"}:
-                base_score = 60
-            else:
-                base_score = 50
-
-            # 3e. Corroboration Bonuses
-            bonus = 0
-            if is_static and has_active_dast_corroboration:
-                bonus += 25  # Strong Static + Active Dynamic Probe Corroboration!
-            elif is_active_dast_probe and has_independent_static_corroboration:
-                bonus += 10  # Active Probe corroborated static finding
-            elif has_independent_static_corroboration:
-                bonus += 15  # Multi-engine independent static corroboration
-            elif has_same_scanner_corroboration:
-                bonus += 5   # Rule correlation from same scanner engine
-
-            # Snippet presence
-            if f.code_snippet and len(f.code_snippet.strip()) > 10:
-                bonus += 5
-
-            calc_score = base_score + bonus
-
-            # Penalties if DAST attempted but failed
-            if is_static and not is_static_only_type and dast_failed:
-                calc_score -= 5
-
-            final_score = max(0, min(100, int(calc_score)))
-            f.confidence_score = final_score
-
-            # 3f. Confidence Level mapping
-            if final_score >= 80:
-                f.confidence_level = "HIGH"
-            elif final_score >= 50:
-                f.confidence_level = "MEDIUM"
-            else:
-                f.confidence_level = "LOW"
-
-            # 3g. Verification Status determination
+            # 3d. Verification Status determination
             if is_active_dast_probe or (is_static and has_active_dast_corroboration):
                 f.verification_status = "VERIFIED"
             elif len(correlated_items) > 0 and (has_independent_static_corroboration or is_generic_web_dast):
@@ -336,6 +293,25 @@ class CrossValidationEngine:
                 f.verification_status = "INCONCLUSIVE"
             else:
                 f.verification_status = "UNVERIFIED"
+
+            # 3e. Centralized Evidence-Based Confidence Score & Level Calculation
+            final_score, final_level = ConfidenceService.calculate_confidence(
+                source=item["source"],
+                scanner_name=item["scanner"],
+                code_snippet=f.code_snippet,
+                file_path=f.file_path,
+                line_number=f.line_number,
+                cwe=f.cwe,
+                owasp=f.owasp,
+                rule_id=f.rule_id,
+                fingerprint=item["fingerprint"],
+                verification_status=f.verification_status,
+                correlation_count=f.correlation_count,
+                correlated_sources=sources_list,
+                dast_attempted_and_failed=(is_static and not is_static_only_type and dast_failed),
+            )
+            f.confidence_score = final_score
+            f.confidence_level = final_level
 
             # 3h. Generate Deterministic & Precise Explanation
             explanation_parts = []

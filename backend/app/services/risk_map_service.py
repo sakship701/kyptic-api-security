@@ -14,6 +14,53 @@ from app.schemas.risk_map import (
 from app.services.report_service import calculate_risk_score
 
 
+def calculate_finding_node_score(finding: Finding) -> float:
+    """
+    Calculates evidence-weighted risk score for a finding node in the Risk Map.
+    Base score comes from CVSS * 10 (if available) or severity default.
+    Weighted by confidence score (0-100) and verification status multiplier.
+    """
+    if finding.cvss is not None:
+        base_score = float(finding.cvss) * 10.0
+    else:
+        sev_str = str(finding.severity.value if hasattr(finding.severity, "value") else finding.severity).upper()
+        sev_map = {
+            "CRITICAL": 95.0,
+            "HIGH": 75.0,
+            "MEDIUM": 50.0,
+            "LOW": 25.0,
+            "INFO": 10.0,
+        }
+        base_score = sev_map.get(sev_str, 50.0)
+
+    confidence = getattr(finding, "confidence_score", None)
+    if confidence is None:
+        confidence = 50.0
+    else:
+        confidence = float(confidence)
+
+    conf_factor = 0.6 + 0.4 * (confidence / 100.0)
+
+    v_status = getattr(finding, "verification_status", "UNVERIFIED")
+    if isinstance(v_status, str):
+        v_status = v_status.upper()
+    else:
+        v_status = str(v_status).upper()
+
+    verif_map = {
+        "VERIFIED": 1.2,
+        "CONFIRMED": 1.2,
+        "UNVERIFIED": 1.0,
+        "INCONCLUSIVE": 0.8,
+        "FALSE_POSITIVE": 0.1,
+        "NOT_CONFIRMED": 0.5,
+    }
+    verif_factor = verif_map.get(v_status, 1.0)
+
+    score = base_score * conf_factor * verif_factor
+    return round(min(100.0, max(0.0, score)), 1)
+
+
 class RiskMapService:
     @classmethod
     def generate_graph(
@@ -45,7 +92,7 @@ class RiskMapService:
         findings = findings_query.order_by(Finding.created_at.desc()).all()
 
         if min_risk_score is not None:
-            findings = [f for f in findings if (f.cvss or 0) * 10 >= min_risk_score]
+            findings = [f for f in findings if calculate_finding_node_score(f) >= min_risk_score]
 
         overall_score, overall_grade, counts = calculate_risk_score(findings)
 
@@ -173,7 +220,7 @@ class RiskMapService:
             finding_node_id = f"finding-{finding.id}"
             sev_str = str(finding.severity.value if hasattr(finding.severity, "value") else finding.severity).lower()
             finding_status = "critical" if sev_str in ("critical", "high") else "warning" if sev_str == "medium" else "safe"
-            cvss_score = float(finding.cvss) if finding.cvss is not None else 5.0
+            node_score = calculate_finding_node_score(finding)
 
             nodes.append(
                 RiskMapNode(
@@ -184,7 +231,7 @@ class RiskMapService:
                     icon="bug_report",
                     x=X_FINDING,
                     y=y_finding,
-                    score=cvss_score * 10,
+                    score=node_score,
                     severity=sev_str.upper(),
                     confidence_score=finding.confidence_score,
                     confidence_level=finding.confidence_level,
@@ -195,7 +242,7 @@ class RiskMapService:
                         vulnName=finding.title,
                         owasp=finding.owasp or "N/A",
                         cwe=finding.cwe or "N/A",
-                        cvss=cvss_score,
+                        cvss=float(finding.cvss) if finding.cvss is not None else None,
                         description=finding.description,
                         sastDesc=f"File: {finding.file_path}:{finding.line_number or 'N/A'}. Scanner: {finding.scanner_name or 'Kyptic'}.",
                         sastCode=finding.code_snippet,
@@ -239,12 +286,13 @@ class RiskMapService:
                         icon="shield",
                         x=X_VULN_FILE,
                         y=y_finding,
-                        score=cvss_score * 10,
+                        score=node_score,
                         project_id=project.id,
                         details=RiskMapNodeDetails(
                             vulnName=finding.cwe,
                             owasp=finding.owasp or "N/A",
                             cwe=finding.cwe,
+                            cvss=float(finding.cvss) if finding.cvss is not None else None,
                             description=f"Taxonomy Weakness: {finding.cwe}. OWASP Mapping: {finding.owasp or 'N/A'}.",
                         ),
                     )
@@ -275,7 +323,7 @@ class RiskMapService:
                         icon="code",
                         x=X_VULN_FILE,
                         y=y_finding + 45,
-                        score=cvss_score * 10,
+                        score=node_score,
                         project_id=project.id,
                         details=RiskMapNodeDetails(
                             vulnName=f"Source File: {finding.file_path}",
@@ -286,6 +334,17 @@ class RiskMapService:
                 )
                 node_ids_set.add(file_node_id)
                 file_nodes_created.add(finding.file_path)
+
+            if finding.file_path:
+                edges.append(
+                    RiskMapEdge(
+                        id=f"edge-finding-file-{finding.id}",
+                        source=finding_node_id,
+                        target=f"file-{finding.file_path}",
+                        type="FINDING_FILE",
+                        status=finding_status,
+                    )
+                )
 
             if finding.file_path:
                 edges.append(

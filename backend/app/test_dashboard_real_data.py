@@ -11,6 +11,9 @@ from app.models.scan import Scan, ScanStatus
 from app.models.finding import Finding, FindingSeverity, FindingStatus, FindingSource
 from app.services.posture_service import calculate_risk_score, get_project_posture, get_global_posture
 
+from app.dependencies.auth import get_current_user
+from app.models.user import User
+
 # Setup isolated in-memory SQLite database with StaticPool for thread-safe test sharing
 SQLALCHEMY_TEST_DATABASE_URL = "sqlite:///:memory:"
 test_engine = create_engine(
@@ -29,18 +32,46 @@ def override_get_db():
         db.close()
 
 
-app.dependency_overrides[get_db] = override_get_db
-client = TestClient(app)
+def override_get_current_user():
+    db = TestingSessionLocal()
+    user = db.query(User).filter(User.email == "test_dashboard@kyptic.security").first()
+    if not user:
+        user = User(
+            email="test_dashboard@kyptic.security",
+            full_name="Test Dashboard User",
+            password_hash="hashed",
+            is_active=True,
+        )
+        db.add(user)
+        db.commit()
+        db.refresh(user)
+    db.close()
+    return user
+
+
+@pytest.fixture
+def client():
+    with TestClient(app) as c:
+        yield c
 
 
 @pytest.fixture(autouse=True)
 def setup_test_db():
     app.dependency_overrides[get_db] = override_get_db
+    app.dependency_overrides[get_current_user] = override_get_current_user
     Base.metadata.create_all(bind=test_engine)
     db = TestingSessionLocal()
     db.query(Finding).delete()
     db.query(Scan).delete()
     db.query(Project).delete()
+    db.query(User).delete()
+    user = User(
+        email="test_dashboard@kyptic.security",
+        full_name="Test Dashboard User",
+        password_hash="hashed",
+        is_active=True,
+    )
+    db.add(user)
     db.commit()
     db.close()
     yield
@@ -102,7 +133,7 @@ def test_posture_calculation_with_findings():
     db.close()
 
 
-def test_posture_endpoints_via_client():
+def test_posture_endpoints_via_client(client):
     # Test zero-data global posture
     res = client.get("/api/projects/global/posture")
     assert res.status_code == 200
@@ -123,7 +154,7 @@ def test_posture_endpoints_via_client():
     assert pdata["score"] is None
 
 
-def test_scan_activity_endpoint():
+def test_scan_activity_endpoint(client):
     res = client.get("/api/scans/activity")
     assert res.status_code == 200
     activity_data = res.json()
@@ -132,17 +163,18 @@ def test_scan_activity_endpoint():
     assert all("date" in item and "count" in item for item in activity_data)
 
 
-def test_activity_feed_endpoint():
+def test_activity_feed_endpoint(client):
     res = client.get("/api/activity")
     assert res.status_code == 200
     feed = res.json()
     assert isinstance(feed, list)
 
 
-def test_project_list_real_posture_and_isolation():
+def test_project_list_real_posture_and_isolation(client):
     db = TestingSessionLocal()
-    proj1 = Project(name="Project One", technology="Python")
-    proj2 = Project(name="Project Two", technology="Node")
+    user = db.query(User).filter(User.email == "test_dashboard@kyptic.security").first()
+    proj1 = Project(name="Project One", technology="Python", user_id=user.id)
+    proj2 = Project(name="Project Two", technology="Node", user_id=user.id)
     db.add_all([proj1, proj2])
     db.commit()
 

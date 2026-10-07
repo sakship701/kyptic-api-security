@@ -1,6 +1,9 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
+import { useApp } from '../../context/AppContext';
 import GlassPanel from '../../components/ui/GlassPanel';
-import { fetchProjects, type ProjectApiData } from '../../api/projects';
+import { fetchProjects, fetchProjectPosture, type ProjectApiData, type ProjectPostureData } from '../../api/projects';
+import { fetchProjectCompliance, type ComplianceResponseData } from '../../api/compliance';
+import { fetchFindings, type FindingApiData } from '../../api/findings';
 import { downloadReportPdf, generateReportJson } from '../../api/reports';
 
 interface ReportTemplate {
@@ -32,15 +35,24 @@ interface ScheduledItem {
 }
 
 export const Reports: React.FC = () => {
+  const { activeProjectId } = useApp();
+
   // Projects state
   const [projectsList, setProjectsList] = useState<ProjectApiData[]>([]);
   const [selectedProjectId, setSelectedProjectId] = useState<number | null>(null);
+
+  // Live Metrics State
+  const [postureData, setPostureData] = useState<ProjectPostureData | null>(null);
+  const [complianceData, setComplianceData] = useState<ComplianceResponseData | null>(null);
+  const [topFindings, setTopFindings] = useState<FindingApiData[]>([]);
+  const [isLoadingMetrics, setIsLoadingMetrics] = useState<boolean>(false);
+  const [metricsError, setMetricsError] = useState<string | null>(null);
 
   // Modals state
   const [isPreviewOpen, setIsPreviewOpen] = useState(false);
   const [activePreviewTemplate, setActivePreviewTemplate] = useState<ReportTemplate | null>(null);
   const [previewData, setPreviewData] = useState<any>(null);
-  
+
   const [isScheduleModalOpen, setIsScheduleModalOpen] = useState(false);
   const [newScheduleTitle, setNewScheduleTitle] = useState('');
   const [newScheduleFreq, setNewScheduleFreq] = useState('Weekly');
@@ -55,43 +67,48 @@ export const Reports: React.FC = () => {
   const [filterCategory, setFilterCategory] = useState<'All' | 'Executive' | 'Technical' | 'Compliance'>('All');
   const [isFilterDropdownOpen, setIsFilterDropdownOpen] = useState(false);
 
+  // Dynamic session states (no fake defaults)
+  const [historyList, setHistoryList] = useState<HistoryItem[]>([]);
+  const [scheduledList, setScheduledList] = useState<ScheduledItem[]>([]);
+
   // Fetch projects on mount
-  React.useEffect(() => {
+  useEffect(() => {
     fetchProjects().then(projs => {
       setProjectsList(projs);
-      if (projs.length > 0) {
-        setSelectedProjectId(projs[0].id);
-      }
     }).catch(() => {});
   }, []);
 
-  // Dynamic states
-  const [historyList, setHistoryList] = useState<HistoryItem[]>([
-    {
-      id: 'h-1',
-      title: 'Executive Summary Digest',
-      time: '14:30 Today',
-      generator: 'Generated on-demand',
-      type: 'PDF'
-    },
-    {
-      id: 'h-2',
-      title: 'Compliance Report (SOC2/PCI-DSS)',
-      time: 'Yesterday',
-      generator: 'Generated on-demand',
-      type: 'PDF'
+  useEffect(() => {
+    if (activeProjectId && !isNaN(Number(activeProjectId))) {
+      setSelectedProjectId(Number(activeProjectId));
+    } else if (projectsList.length > 0) {
+      setSelectedProjectId(projectsList[0].id);
     }
-  ]);
+  }, [activeProjectId, projectsList]);
 
-  const [scheduledList, setScheduledList] = useState<ScheduledItem[]>([
-    {
-      id: 's-1',
-      title: 'Weekly Executive Digest',
-      schedule: 'Every Monday at 08:00 AM (EST)',
-      recipientsCount: 2,
-      authorInitials: ['SJ', 'MR']
-    }
-  ]);
+  // Fetch live metrics when selectedProjectId changes
+  useEffect(() => {
+    if (!selectedProjectId) return;
+    setIsLoadingMetrics(true);
+    setMetricsError(null);
+
+    Promise.all([
+      fetchProjectPosture(selectedProjectId),
+      fetchProjectCompliance(selectedProjectId),
+      fetchFindings(selectedProjectId)
+    ]).then(([posture, compliance, findings]) => {
+      setPostureData(posture);
+      setComplianceData(compliance);
+
+      const sevRank: Record<string, number> = { critical: 4, high: 3, medium: 2, low: 1, info: 0 };
+      const sorted = [...findings].sort((a, b) => (sevRank[b.severity] || 0) - (sevRank[a.severity] || 0));
+      setTopFindings(sorted.slice(0, 3));
+      setIsLoadingMetrics(false);
+    }).catch((err) => {
+      setMetricsError(err.message || 'Failed to load project metrics.');
+      setIsLoadingMetrics(false);
+    });
+  }, [selectedProjectId]);
 
   const templates: ReportTemplate[] = [
     {
@@ -206,6 +223,10 @@ export const Reports: React.FC = () => {
     }
   };
 
+  const selectedProjectObj = projectsList.find(p => p.id === selectedProjectId);
+  const scoreVal = postureData?.score != null ? postureData.score : (isLoadingMetrics ? null : 0);
+  const scoreGrade = postureData?.grade || (isLoadingMetrics ? 'Loading...' : 'No assessment data');
+
   return (
     <div className="p-4 md:p-container-padding max-w-[1600px] mx-auto w-full flex flex-col gap-stack-lg text-on-surface relative">
       
@@ -219,77 +240,108 @@ export const Reports: React.FC = () => {
         </p>
       </header>
 
+      {/* Error Banner */}
+      {metricsError && (
+        <div className="p-3 bg-error/10 border border-error/30 rounded-lg text-error text-xs font-mono">
+          Warning loading project metrics: {metricsError}
+        </div>
+      )}
+
       {/* Summary Cards Bento Grid */}
       <section className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-stack-md select-none">
         
+        {/* Card 1: Apps Scanned */}
         <GlassPanel className="p-stack-md flex flex-col gap-stack-sm col-span-1">
           <span className="font-label-mono text-label-mono text-on-surface-variant uppercase">Apps Scanned</span>
           <div className="flex items-baseline gap-2">
-            <span className="text-3xl font-headline-md text-on-surface font-bold">42</span>
-          </div>
-        </GlassPanel>
-
-        <GlassPanel className="p-stack-md flex flex-col gap-stack-sm col-span-1">
-          <span className="font-label-mono text-label-mono text-on-surface-variant uppercase">Reports Gen</span>
-          <div className="flex items-baseline gap-2">
-            <span className="text-3xl font-headline-md text-on-surface font-bold">128</span>
-            <span className="text-primary text-sm flex items-center font-bold">
-              <span className="material-symbols-outlined text-[16px]">arrow_upward</span> 12%
+            <span className="text-3xl font-headline-md text-on-surface font-bold">
+              {projectsList.length}
             </span>
           </div>
         </GlassPanel>
 
+        {/* Card 2: Reports Gen */}
+        <GlassPanel className="p-stack-md flex flex-col gap-stack-sm col-span-1">
+          <span className="font-label-mono text-label-mono text-on-surface-variant uppercase">Reports Gen</span>
+          <div className="flex items-baseline gap-2">
+            <span className="text-3xl font-headline-md text-on-surface font-bold">
+              {historyList.length > 0 ? historyList.length : "0 tracked"}
+            </span>
+          </div>
+        </GlassPanel>
+
+        {/* Card 3: Overall Security Score */}
         <GlassPanel className="p-stack-md flex flex-col gap-stack-sm col-span-2 relative overflow-hidden">
           <div className="absolute inset-0 bg-gradient-to-br from-primary/10 to-transparent z-0" />
           <div className="relative z-10 flex justify-between items-center h-full">
             <div className="flex flex-col gap-stack-sm">
               <span className="font-label-mono text-label-mono text-primary uppercase">Overall Security Score</span>
               <div className="flex items-baseline gap-2">
-                <span className="text-4xl font-headline-md text-on-surface font-bold">68</span>
+                <span className="text-4xl font-headline-md text-on-surface font-bold">
+                  {isLoadingMetrics ? '...' : (scoreVal ?? 0)}
+                </span>
                 <span className="text-on-surface-variant font-body-md">/ 100</span>
               </div>
+              <span className="text-xs text-on-surface-variant font-label-mono">
+                Grade: {scoreGrade}
+              </span>
             </div>
             {/* Minimal circular progress representation */}
             <div className="w-16 h-16 rounded-full border-4 border-outline-variant flex items-center justify-center relative">
               <svg className="absolute inset-0 w-full h-full transform -rotate-90" viewBox="0 0 100 100">
                 <circle className="text-surface-variant/20" cx="50" cy="50" fill="transparent" r="45" stroke="currentColor" strokeWidth="8" />
-                <circle className="text-tertiary" cx="50" cy="50" fill="transparent" r="45" stroke="currentColor" strokeDasharray="283" strokeDashoffset="90" strokeWidth="8" />
+                <circle 
+                  className={scoreVal && scoreVal >= 60 ? "text-tertiary" : "text-error"} 
+                  cx="50" cy="50" fill="transparent" r="45" stroke="currentColor" 
+                  strokeDasharray="283" 
+                  strokeDashoffset={283 - (283 * (scoreVal || 0)) / 100} 
+                  strokeWidth="8" 
+                />
               </svg>
-              <span className="material-symbols-outlined text-tertiary">format_image_left</span>
+              <span className="material-symbols-outlined text-tertiary">shield</span>
             </div>
           </div>
         </GlassPanel>
 
+        {/* Card 4: Compliance Status */}
         <GlassPanel className="p-stack-md flex flex-col gap-stack-sm col-span-2">
           <div className="flex justify-between items-start">
             <span className="font-label-mono text-label-mono text-on-surface-variant uppercase">Compliance Status</span>
             <span className="px-2 py-0.5 rounded bg-primary-container/20 text-primary font-label-mono text-[10px] border border-primary-container/30">
-              PCI-DSS, SOC2
+              {complianceData?.summary?.framework_name || complianceData?.framework || 'PCI-DSS'}
             </span>
           </div>
           <div className="flex flex-col mt-auto gap-2">
             <div className="flex justify-between font-label-mono text-xs">
               <span className="text-on-surface-variant">Overall Readiness</span>
-              <span className="text-primary font-bold">85%</span>
+              <span className="text-primary font-bold">
+                {isLoadingMetrics ? '...' : `${complianceData?.summary?.coverage_percentage ?? 0}%`}
+              </span>
             </div>
             <div className="w-full bg-[#1C2026] h-1.5 rounded-full overflow-hidden">
-              <div className="bg-primary h-full rounded-full" style={{ width: '85%' }} />
+              <div 
+                className="bg-primary h-full rounded-full transition-all duration-500" 
+                style={{ width: `${complianceData?.summary?.coverage_percentage ?? 0}%` }} 
+              />
             </div>
           </div>
         </GlassPanel>
 
+        {/* Card 5: Critical Findings */}
         <GlassPanel className="p-stack-md flex flex-col gap-stack-sm col-span-1 border-l-2 border-l-error">
           <span className="font-label-mono text-label-mono text-error uppercase">Critical Findings</span>
           <div className="flex items-baseline gap-2">
-            <span className="text-3xl font-headline-md text-error font-bold">12</span>
+            <span className="text-3xl font-headline-md text-error font-bold">
+              {isLoadingMetrics ? '...' : (postureData?.counts?.critical ?? 0)}
+            </span>
           </div>
         </GlassPanel>
 
+        {/* Card 6: Avg Fix Time */}
         <GlassPanel className="p-stack-md flex flex-col gap-stack-sm col-span-1">
           <span className="font-label-mono text-label-mono text-on-surface-variant uppercase">Avg Fix Time</span>
           <div className="flex items-baseline gap-2">
-            <span className="text-3xl font-headline-md text-on-surface font-bold">4.2</span>
-            <span className="text-on-surface-variant text-sm">Days</span>
+            <span className="text-2xl font-headline-md text-on-surface font-bold">N/A</span>
           </div>
         </GlassPanel>
 
@@ -419,18 +471,30 @@ export const Reports: React.FC = () => {
             </div>
             
             <div className="text-sm text-on-surface-variant leading-relaxed">
-              <p className="mb-4">Kyptic AI has analyzed the latest scan results across all applications and generated strategic insights.</p>
+              <p className="mb-4">Kyptic AI has analyzed the security scan results for target project <span className="text-on-surface font-bold">{selectedProjectObj?.name || `ID: ${selectedProjectId}`}</span>.</p>
               
-              <div className="bg-surface-container-highest p-3 rounded-lg border border-outline-variant/40 mb-4 relative overflow-hidden">
-                <div className="absolute top-0 left-0 w-1 h-full bg-error" />
-                <div className="flex items-center gap-2 mb-2 select-none">
-                  <span className="material-symbols-outlined text-error text-[16px]">warning</span>
-                  <span className="font-bold text-on-surface text-xs uppercase tracking-wider">Business Impact</span>
+              {postureData && topFindings.length > 0 ? (
+                <div className="bg-surface-container-highest p-3 rounded-lg border border-outline-variant/40 mb-4 relative overflow-hidden">
+                  <div className="absolute top-0 left-0 w-1 h-full bg-error" />
+                  <div className="flex items-center gap-2 mb-2 select-none">
+                    <span className="material-symbols-outlined text-error text-[16px]">warning</span>
+                    <span className="font-bold text-on-surface text-xs uppercase tracking-wider">Primary Security Risk</span>
+                  </div>
+                  <p className="text-xs text-on-surface-variant">
+                    <span className="font-bold text-on-surface">{topFindings[0].title}</span> ({topFindings[0].severity.toUpperCase()}) detected. Project has <span className="text-error font-bold">{postureData.total_findings} total finding(s)</span> ({postureData.counts.critical} Critical, {postureData.counts.high} High, {postureData.counts.medium} Medium).
+                  </p>
                 </div>
-                <p className="text-xs text-on-surface-variant">
-                  Unpatched critical vulnerabilities in the Payment Gateway module present an estimated <span className="text-error font-mono font-bold">$1.2M</span> financial risk exposure.
-                </p>
-              </div>
+              ) : (
+                <div className="bg-surface-container-highest p-3 rounded-lg border border-outline-variant/40 mb-4 relative overflow-hidden">
+                  <div className="flex items-center gap-2 mb-2 select-none">
+                    <span className="material-symbols-outlined text-primary text-[16px]">info</span>
+                    <span className="font-bold text-on-surface text-xs uppercase tracking-wider">Project Posture</span>
+                  </div>
+                  <p className="text-xs text-on-surface-variant">
+                    {isLoadingMetrics ? 'Analyzing project posture...' : 'No critical findings recorded for this project.'}
+                  </p>
+                </div>
+              )}
             </div>
 
             <div className="flex flex-col gap-2">
@@ -481,37 +545,34 @@ export const Reports: React.FC = () => {
           <h3 className="font-headline-md text-lg text-on-surface font-semibold select-none">Recent Reports History</h3>
           
           <div className="bg-surface-container rounded-xl border border-outline-variant/30 p-stack-md">
-            <div className="relative border-l border-outline-variant ml-3 space-y-6">
-              
-              {historyList.map((hist) => (
-                <div key={hist.id} className="relative pl-6">
-                  <div className="absolute w-3 h-3 bg-primary rounded-full -left-[6.5px] top-1.5 shadow-[0_0_8px_rgba(49,146,252,0.6)]" />
-                  <div className="flex flex-col gap-1">
-                    <div className="flex justify-between items-start">
-                      <h4 className="text-sm font-bold text-on-surface select-all">{hist.title}</h4>
-                      <span className="text-xs text-on-surface-variant font-label-mono">{hist.time}</span>
-                    </div>
-                    <p className="text-xs text-on-surface-variant">{hist.generator}</p>
-                    <div className="flex gap-2 mt-2 select-none">
-                      <button 
-                        onClick={() => alert(`Downloading ${hist.type}...`)}
-                        className="text-primary text-xs hover:underline flex items-center gap-1 bg-transparent border-none cursor-pointer"
-                      >
-                        <span className="material-symbols-outlined text-[14px]">download</span> {hist.type}
-                      </button>
+            {historyList.length > 0 ? (
+              <div className="relative border-l border-outline-variant ml-3 space-y-6">
+                {historyList.map((hist) => (
+                  <div key={hist.id} className="relative pl-6">
+                    <div className="absolute w-3 h-3 bg-primary rounded-full -left-[6.5px] top-1.5 shadow-[0_0_8px_rgba(49,146,252,0.6)]" />
+                    <div className="flex flex-col gap-1">
+                      <div className="flex justify-between items-start">
+                        <h4 className="text-sm font-bold text-on-surface select-all">{hist.title}</h4>
+                        <span className="text-xs text-on-surface-variant font-label-mono">{hist.time}</span>
+                      </div>
+                      <p className="text-xs text-on-surface-variant">{hist.generator}</p>
+                      <div className="flex gap-2 mt-2 select-none">
+                        <button 
+                          onClick={() => alert(`Downloading ${hist.type}...`)}
+                          className="text-primary text-xs hover:underline flex items-center gap-1 bg-transparent border-none cursor-pointer"
+                        >
+                          <span className="material-symbols-outlined text-[14px]">download</span> {hist.type}
+                        </button>
+                      </div>
                     </div>
                   </div>
-                </div>
-              ))}
-
-            </div>
-            
-            <button 
-              onClick={() => alert('All archives are loaded!')}
-              className="w-full text-center mt-6 text-sm text-on-surface-variant hover:text-primary transition-colors cursor-pointer bg-transparent border-none"
-            >
-              View All History
-            </button>
+                ))}
+              </div>
+            ) : (
+              <div className="p-6 text-center text-on-surface-variant text-xs font-label-mono">
+                No report downloads recorded in this session yet. Use the action buttons above to compile and download PDF reports.
+              </div>
+            )}
           </div>
         </div>
 
@@ -529,48 +590,52 @@ export const Reports: React.FC = () => {
           </div>
 
           <div className="flex flex-col gap-3">
-            
-            {scheduledList.map((item) => (
-              <div 
-                key={item.id}
-                className="bg-surface-container rounded-lg border border-outline-variant/30 p-4 flex items-center justify-between hover:border-outline-variant transition-colors group"
-              >
-                <div className="flex items-center gap-4">
-                  <div className="w-10 h-10 rounded-full bg-surface-variant flex items-center justify-center border border-outline-variant/50">
-                    <span className="material-symbols-outlined text-on-surface-variant text-[18px]">calendar_month</span>
-                  </div>
-                  <div>
-                    <h4 className="text-sm font-bold text-on-surface select-all">{item.title}</h4>
-                    <p className="text-xs text-on-surface-variant mt-0.5 select-all">{item.schedule}</p>
-                  </div>
-                </div>
-                
-                <div className="flex items-center gap-4 select-none">
-                  {item.authorInitials ? (
-                    <div className="flex -space-x-2">
-                      {item.authorInitials.map((ini, i) => (
-                        <div key={i} className="w-6 h-6 rounded-full bg-secondary-container border border-surface text-[10px] flex items-center justify-center text-on-surface">
-                          {ini}
-                        </div>
-                      ))}
+            {scheduledList.length > 0 ? (
+              scheduledList.map((item) => (
+                <div 
+                  key={item.id}
+                  className="bg-surface-container rounded-lg border border-outline-variant/30 p-4 flex items-center justify-between hover:border-outline-variant transition-colors group"
+                >
+                  <div className="flex items-center gap-4">
+                    <div className="w-10 h-10 rounded-full bg-surface-variant flex items-center justify-center border border-outline-variant/50">
+                      <span className="material-symbols-outlined text-on-surface-variant text-[18px]">calendar_month</span>
                     </div>
-                  ) : (
-                    <span className="text-xs text-on-surface-variant px-2 py-1 bg-surface-variant rounded">
-                      {item.recipientsCount} Recipients
-                    </span>
-                  )}
+                    <div>
+                      <h4 className="text-sm font-bold text-on-surface select-all">{item.title}</h4>
+                      <p className="text-xs text-on-surface-variant mt-0.5 select-all">{item.schedule}</p>
+                    </div>
+                  </div>
                   
-                  <button 
-                    onClick={() => handleDeleteSchedule(item.id)}
-                    className="text-on-surface-variant hover:text-error transition-colors bg-transparent border-none cursor-pointer"
-                    title="Remove Schedule"
-                  >
-                    <span className="material-symbols-outlined text-[18px]">delete</span>
-                  </button>
+                  <div className="flex items-center gap-4 select-none">
+                    {item.authorInitials ? (
+                      <div className="flex -space-x-2">
+                        {item.authorInitials.map((ini, i) => (
+                          <div key={i} className="w-6 h-6 rounded-full bg-secondary-container border border-surface text-[10px] flex items-center justify-center text-on-surface">
+                            {ini}
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <span className="text-xs text-on-surface-variant px-2 py-1 bg-surface-variant rounded">
+                        {item.recipientsCount} Recipients
+                      </span>
+                    )}
+                    
+                    <button 
+                      onClick={() => handleDeleteSchedule(item.id)}
+                      className="text-on-surface-variant hover:text-error transition-colors bg-transparent border-none cursor-pointer"
+                      title="Remove Schedule"
+                    >
+                      <span className="material-symbols-outlined text-[18px]">delete</span>
+                    </button>
+                  </div>
                 </div>
+              ))
+            ) : (
+              <div className="p-6 text-center text-on-surface-variant text-xs font-label-mono bg-surface-container rounded-lg border border-outline-variant/30">
+                No scheduled reports configured. Click "+ New Schedule" to set up recurring report deliveries.
               </div>
-            ))}
-
+            )}
           </div>
         </div>
 

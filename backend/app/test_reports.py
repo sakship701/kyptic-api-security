@@ -3,13 +3,16 @@ from datetime import datetime
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
-
 from sqlalchemy.pool import StaticPool
+
 from app.database import Base, get_db
 from app.main import app
 from app.models.finding import Finding, FindingSeverity, FindingSource, FindingStatus
 from app.models.project import Project
 from app.models.scan import Scan, ScanStatus
+from app.models.user import User
+from app.services.auth_service import create_access_token, hash_password
+from app.config import settings
 from app.services.report_service import ReportService, calculate_risk_score, map_owasp_category
 
 
@@ -30,10 +33,6 @@ class TestReportService(unittest.TestCase):
         app.dependency_overrides[get_db] = override_get_db
 
         # Seed test user
-        from app.models.user import User
-        from app.services.auth_service import create_access_token, hash_password
-        from app.config import settings
-
         self.user = User(
             email=settings.BOOTSTRAP_OWNER_EMAIL,
             password_hash=hash_password("Password123!"),
@@ -112,11 +111,10 @@ class TestReportService(unittest.TestCase):
 
     def tearDown(self):
         self.db.close()
+        app.dependency_overrides.clear()
 
     # 1. Test deterministic risk score formula
     def test_risk_score_calculation(self):
-        # 1 Critical (-15), 1 High (-8), 1 Medium (-3) => Total deduction = 26.
-        # Score = 100 - 26 = 74 -> Grade C
         score, grade, counts = calculate_risk_score([self.f1, self.f2, self.f3])
         self.assertEqual(score, 74)
         self.assertEqual(grade, "C (Needs Improvement)")
@@ -130,60 +128,132 @@ class TestReportService(unittest.TestCase):
         self.assertEqual(map_owasp_category("Cryptographic Failures", "AWS Key"), "A02:2021 - Cryptographic Failures")
         self.assertEqual(map_owasp_category("Dependency Vulnerability", "CVE-2023"), "A06:2021 - Vulnerable & Outdated Components")
 
-    # 3. Test JSON report generation
-    def test_json_report_generation(self):
-        res = self.service.generate_json_report(self.project.id, "executive")
-        self.assertEqual(res["project_id"], self.project.id)
-        self.assertEqual(res["project_name"], "Report Test Application")
-        self.assertEqual(res["metrics"]["security_score"], 74)
-        self.assertEqual(len(res["findings"]), 3)
+    # 3. Test Executive Report Content (Requirement A)
+    def test_executive_report_differentiation(self):
+        json_rep = self.service.generate_json_report(self.project.id, "executive")
+        self.assertEqual(json_rep["report_type"], "executive")
+        self.assertIn("top_strategic_risks", json_rep)
+        self.assertIn("remediation_priorities", json_rep)
+        self.assertNotIn("technical_details", json_rep)
+        self.assertNotIn("compliance_summary", json_rep)
+        self.assertNotIn("owasp_summary", json_rep)
 
-    # 4. Test HTML report generation
-    def test_html_report_generation(self):
-        res_html = self.service.generate_html_report(self.project.id, "developer")
-        self.assertIn("<!DOCTYPE html>", res_html)
-        self.assertIn("Report Test Application", res_html)
-        self.assertIn("SQL Injection Vulnerability", res_html)
-        self.assertIn("74/100", res_html)
+        html_rep = self.service.generate_html_report(self.project.id, "executive")
+        self.assertIn("Executive Summary & Risk Posture", html_rep)
+        self.assertIn("Top Strategic Risks", html_rep)
+        self.assertIn("Leadership Remediation Priorities", html_rep)
 
-    # 5. Test PDF report binary generation
-    def test_pdf_report_generation(self):
         pdf_bytes = self.service.generate_pdf_report(self.project.id, "executive")
         self.assertTrue(pdf_bytes.startswith(b"%PDF-1."))
-        self.assertGreater(len(pdf_bytes), 1000)
 
-    # 6. Test FastAPI endpoints via TestClient
-    def test_api_endpoints(self):
+    # 4. Test Developer Report Content (Requirement B)
+    def test_developer_report_differentiation(self):
+        json_rep = self.service.generate_json_report(self.project.id, "developer")
+        self.assertEqual(json_rep["report_type"], "developer")
+        self.assertIn("technical_details", json_rep)
+        self.assertIn("grouped_by_file", json_rep["technical_details"])
+        self.assertNotIn("top_strategic_risks", json_rep)
+        self.assertNotIn("compliance_summary", json_rep)
+
+        html_rep = self.service.generate_html_report(self.project.id, "developer")
+        self.assertIn("Developer Technical Deep-Dive", html_rep)
+        self.assertIn("app/db.py", html_rep)
+        self.assertIn("SAST-SQL-INJECTION", html_rep)
+
+        pdf_bytes = self.service.generate_pdf_report(self.project.id, "developer")
+        self.assertTrue(pdf_bytes.startswith(b"%PDF-1."))
+
+    # 5. Test Compliance Report Content (Requirement C)
+    def test_compliance_report_differentiation(self):
+        json_rep = self.service.generate_json_report(self.project.id, "compliance")
+        self.assertEqual(json_rep["report_type"], "compliance")
+        self.assertIn("compliance_summary", json_rep)
+        self.assertIn("controls", json_rep)
+        self.assertEqual(json_rep["compliance_summary"]["framework"], "PCI_DSS")
+        self.assertIn("coverage_percentage", json_rep["compliance_summary"])
+
+        html_rep = self.service.generate_html_report(self.project.id, "compliance")
+        self.assertIn("Regulatory Compliance Assessment", html_rep)
+        self.assertIn("Control Evaluation Trail", html_rep)
+
+        pdf_bytes = self.service.generate_pdf_report(self.project.id, "compliance")
+        self.assertTrue(pdf_bytes.startswith(b"%PDF-1."))
+
+    # 6. Test OWASP Report Content (Requirement D)
+    def test_owasp_report_differentiation(self):
+        json_rep = self.service.generate_json_report(self.project.id, "owasp")
+        self.assertEqual(json_rep["report_type"], "owasp")
+        self.assertIn("owasp_summary", json_rep)
+        self.assertIn("categories", json_rep["owasp_summary"])
+
+        html_rep = self.service.generate_html_report(self.project.id, "owasp")
+        self.assertIn("OWASP Top 10 Security Threat Distribution", html_rep)
+
+        pdf_bytes = self.service.generate_pdf_report(self.project.id, "owasp")
+        self.assertTrue(pdf_bytes.startswith(b"%PDF-1."))
+
+    # 7. Test Same Project ID and Real Findings Across All 4 Report Types (Requirement E, F)
+    def test_all_report_types_use_same_project_id_and_findings(self):
+        for rtype in ["executive", "developer", "compliance", "owasp"]:
+            res = self.service.generate_json_report(self.project.id, rtype)
+            self.assertEqual(res["project_id"], self.project.id)
+            self.assertEqual(res["project_name"], "Report Test Application")
+            self.assertEqual(len(res["findings"]), 3)
+
+    # 8. Test Invalid Report Type Handling (Requirement G)
+    def test_invalid_report_type_raises_error(self):
+        with self.assertRaises(ValueError):
+            self.service.generate_json_report(self.project.id, "invalid_type")
+
+        with self.assertRaises(ValueError):
+            self.service.generate_html_report(self.project.id, "unknown_type")
+
+        with self.assertRaises(ValueError):
+            self.service.generate_pdf_report(self.project.id, "malformed")
+
+    # 9. Test PDF Generation for All 4 Types (Requirement H)
+    def test_pdf_generation_succeeds_for_all_types(self):
+        for rtype in ["executive", "developer", "compliance", "owasp"]:
+            pdf_bytes = self.service.generate_pdf_report(self.project.id, rtype)
+            self.assertTrue(pdf_bytes.startswith(b"%PDF-1."))
+            self.assertGreater(len(pdf_bytes), 1000)
+
+    # 10. Test HTML and JSON Generation for All 4 Types (Requirement I)
+    def test_html_and_json_generation_succeeds_for_all_types(self):
+        for rtype in ["executive", "developer", "compliance", "owasp"]:
+            json_res = self.service.generate_json_report(self.project.id, rtype)
+            self.assertEqual(json_res["report_type"], rtype)
+            html_res = self.service.generate_html_report(self.project.id, rtype)
+            self.assertIn("KYPTIC SECURITY REPORT", html_res)
+
+    # 11. Test FastAPI Endpoints via TestClient
+    def test_api_endpoints_all_report_types(self):
         client = TestClient(app)
         headers = {"Authorization": f"Bearer {self.token}"}
-        
+
         # GET /api/v1/reports/templates
         res_templates = client.get("/api/v1/reports/templates", headers=headers)
         self.assertEqual(res_templates.status_code, 200)
-        self.assertGreaterEqual(len(res_templates.json()), 4)
 
-        # POST /api/v1/reports/generate (json)
-        res_gen_json = client.post(
-            "/api/v1/reports/generate",
-            json={"project_id": self.project.id, "report_type": "executive", "format": "json"},
-            headers=headers
-        )
-        self.assertEqual(res_gen_json.status_code, 200)
-        self.assertEqual(res_gen_json.json()["metrics"]["security_score"], 74)
+        for rtype in ["executive", "developer", "compliance", "owasp"]:
+            # JSON format
+            res_json = client.post(
+                "/api/v1/reports/generate",
+                json={"project_id": self.project.id, "report_type": rtype, "format": "json"},
+                headers=headers
+            )
+            self.assertEqual(res_json.status_code, 200)
+            self.assertEqual(res_json.json()["report_type"], rtype)
 
-        # POST /api/v1/reports/generate (pdf)
-        res_gen_pdf = client.post(
-            "/api/v1/reports/generate",
-            json={"project_id": self.project.id, "report_type": "developer", "format": "pdf"},
-            headers=headers
-        )
-        self.assertEqual(res_gen_pdf.status_code, 200)
-        self.assertEqual(res_gen_pdf.headers["content-type"], "application/pdf")
-        self.assertTrue(res_gen_pdf.content.startswith(b"%PDF-1."))
-
-    def tearDown(self):
-        self.db.close()
-        app.dependency_overrides.clear()
+            # PDF format
+            res_pdf = client.post(
+                "/api/v1/reports/generate",
+                json={"project_id": self.project.id, "report_type": rtype, "format": "pdf"},
+                headers=headers
+            )
+            self.assertEqual(res_pdf.status_code, 200)
+            self.assertEqual(res_pdf.headers["content-type"], "application/pdf")
+            self.assertTrue(res_pdf.content.startswith(b"%PDF-1."))
 
 
 if __name__ == "__main__":

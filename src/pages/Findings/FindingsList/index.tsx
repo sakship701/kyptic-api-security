@@ -55,21 +55,26 @@ export const FindingsList: React.FC = () => {
     else if (finding.source === 'sast') sourceLabel = 'SAST';
     else sourceLabel = (finding.source || 'SAST').toUpperCase();
 
+    const normSev = (finding.severity || 'low').toLowerCase();
+    const severity = normSev === 'critical' ? 'Critical' : normSev === 'high' ? 'High' : normSev === 'medium' ? 'Medium' : 'Low';
+    const normStatus = (finding.status || 'open').toLowerCase();
+    const status = normStatus === 'resolved' ? 'Resolved' : normStatus === 'false_positive' ? 'False Positive' : 'Open';
+
     return {
       id: String(finding.id),
-      severity: finding.severity === 'critical' ? 'Critical' : finding.severity === 'high' ? 'High' : finding.severity === 'medium' ? 'Medium' : 'Low',
-      title: finding.title,
-      component: finding.file_path,
+      severity,
+      title: finding.title || 'Untitled Finding',
+      component: finding.file_path || 'Unknown location',
       componentType: (finding.source === 'dast' || finding.source === 'api_security') ? 'api' : finding.source === 'sca' ? 'security' : 'code',
       sourceLabel,
-      sourceType: finding.source,
+      sourceType: finding.source || 'sast',
       cwe: finding.source === 'sca' ? (finding.rule_id || 'SCA Vulnerability') : finding.cwe || 'Security Finding',
-      owasp: finding.source === 'sca' ? 'Dependency Vulnerability' : finding.owasp || finding.category,
+      owasp: finding.source === 'sca' ? 'Dependency Vulnerability' : finding.owasp || finding.category || 'Uncategorized',
       cvss: finding.cvss != null ? Number(finding.cvss) : null,
       confidence: finding.confidence_score ?? 100,
-      status: finding.status === 'open' ? 'Open' : finding.status === 'resolved' ? 'Resolved' : 'False Positive',
+      status,
       aiValidated: finding.source === 'correlation',
-      exploitable: finding.severity === 'critical',
+      exploitable: normSev === 'critical',
       projectId: finding.project_id,
       verificationStatus: finding.verification_status || 'UNVERIFIED',
     };
@@ -77,8 +82,13 @@ export const FindingsList: React.FC = () => {
 
   useEffect(() => {
     setFindingsLoading(true);
-    void fetchFindings()
-      .then((findings) => setFindingsData(findings.filter((finding) => !activeProjectId || String(finding.project_id) === activeProjectId).map(mapFinding)))
+    setFindingsError(null);
+    void fetchFindings(activeProjectId)
+      .then((findings) => {
+        const rawList = Array.isArray(findings) ? findings : (findings as any)?.findings || (findings as any)?.items || (findings as any)?.data || [];
+        const filtered = rawList.filter((finding: FindingApiData) => !activeProjectId || String(finding.project_id) === String(activeProjectId));
+        setFindingsData(filtered.map(mapFinding));
+      })
       .catch((error: unknown) => setFindingsError(error instanceof Error ? error.message : 'Unable to load findings.'))
       .finally(() => setFindingsLoading(false));
   }, [activeProjectId]);
@@ -106,20 +116,56 @@ export const FindingsList: React.FC = () => {
     setStatusFilter('All');
   };
 
+  // Derived severity distribution & stats from real findingsData
+  const severityCounts = React.useMemo(() => {
+    const counts = { Critical: 0, High: 0, Medium: 0, Low: 0 };
+    findingsData.forEach(f => {
+      if (f.severity in counts) {
+        counts[f.severity as keyof typeof counts]++;
+      }
+    });
+    return counts;
+  }, [findingsData]);
+
+  const computedScore = React.useMemo(() => {
+    if (!findingsData || findingsData.length === 0) {
+      return activeProject.score;
+    }
+    const deduction =
+      severityCounts.Critical * 15 +
+      severityCounts.High * 8 +
+      severityCounts.Medium * 3 +
+      severityCounts.Low * 1;
+    return Math.max(0, Math.min(100, 100 - deduction));
+  }, [findingsData, severityCounts, activeProject.score]);
+
+  const computedRiskLevel = React.useMemo(() => {
+    if (computedScore === null || computedScore === undefined) return 'N/A';
+    if (computedScore < 60) return 'Critical';
+    if (computedScore < 80) return 'High';
+    return 'Low';
+  }, [computedScore]);
+
   // Filter & Search Logic
   const filteredFindings = findingsData.filter((item) => {
     // Search filter
+    const query = searchQuery.toLowerCase().trim();
     const matchesSearch =
-      item.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      item.component.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      item.cwe.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      item.owasp.toLowerCase().includes(searchQuery.toLowerCase());
+      !query ||
+      (item.title && item.title.toLowerCase().includes(query)) ||
+      (item.component && item.component.toLowerCase().includes(query)) ||
+      (item.cwe && item.cwe.toLowerCase().includes(query)) ||
+      (item.owasp && item.owasp.toLowerCase().includes(query));
 
     // Severity Filter
-    const matchesSeverity = filterSeverity[item.severity];
+    const matchesSeverity = filterSeverity[item.severity] ?? true;
 
     // OWASP Filter
-    const matchesOwasp = owaspFilter === 'All Categories' || item.owasp.startsWith(owaspFilter.split(':')[0]);
+    const categoryCode = owaspFilter.split(':')[0].toLowerCase().trim();
+    const matchesOwasp =
+      owaspFilter === 'All Categories' ||
+      (item.owasp && item.owasp.toLowerCase().includes(categoryCode)) ||
+      (item.owasp && item.owasp.toLowerCase().startsWith(categoryCode));
 
     // Validation Status Filter
     const matchesStatus =
@@ -210,11 +256,11 @@ export const FindingsList: React.FC = () => {
           <div className="absolute inset-0 bg-primary/5 opacity-0 group-hover:opacity-100 transition-opacity"></div>
           <span className="text-on-surface-variant font-label-mono text-[11px] uppercase tracking-widest z-10">Security Score</span>
           <div className="mt-2 flex items-baseline gap-1 z-10">
-            <span className="text-3xl font-headline-md font-bold text-on-surface">{activeProject.score ?? '--'}</span>
+            <span className="text-3xl font-headline-md font-bold text-on-surface">{computedScore ?? '--'}</span>
             <span className="text-on-surface-variant text-sm">/100</span>
           </div>
           <div className="w-full bg-surface-container h-1 mt-3 rounded-full overflow-hidden z-10">
-            <div className="bg-primary h-full rounded-full" style={{ width: `${activeProject.score ?? 0}%` }}></div>
+            <div className="bg-primary h-full rounded-full" style={{ width: `${computedScore ?? 0}%` }}></div>
           </div>
         </GlassPanel>
 
@@ -225,7 +271,7 @@ export const FindingsList: React.FC = () => {
           <div className="mt-2 flex items-center gap-2 z-10">
             <span className="material-symbols-outlined text-[#ff9800] text-[28px]">warning</span>
             <span className="text-2xl font-headline-md font-bold text-on-surface">
-              {activeProject.score === null || activeProject.score === undefined ? 'N/A' : activeProject.score < 60 ? 'Critical' : activeProject.score < 80 ? 'High' : 'Low'}
+              {computedRiskLevel}
             </span>
           </div>
         </GlassPanel>
@@ -235,7 +281,7 @@ export const FindingsList: React.FC = () => {
           <span className="text-on-surface-variant font-label-mono text-[11px] uppercase tracking-widest">Verified Vulns</span>
           <div className="mt-2 z-10">
             <span className="text-3xl font-headline-md font-bold text-on-surface">
-              {findingsData.filter(f => f.verificationStatus === 'VERIFIED' || f.verificationStatus === 'CORROBORATED').length}
+              {findingsData.filter(f => f.verificationStatus === 'VERIFIED' || f.verificationStatus === 'CORROBORATED' || f.verificationStatus === 'CONFIRMED').length}
             </span>
           </div>
           <span className="text-on-surface-variant text-xs flex items-center gap-1 mt-1 font-label-mono uppercase">
@@ -269,19 +315,19 @@ export const FindingsList: React.FC = () => {
         <GlassPanel className="rounded-lg p-4 flex flex-col justify-center gap-2">
           <div className="flex items-center justify-between text-xs">
             <span className="flex items-center gap-2"><div className="w-2 h-2 rounded-full bg-[#ff4d4d]"></div> Critical</span>
-            <span className="font-code-sm font-bold">{activeProject.critical}</span>
+            <span className="font-code-sm font-bold">{findingsData.length > 0 ? severityCounts.Critical : activeProject.critical}</span>
           </div>
           <div className="flex items-center justify-between text-xs">
             <span className="flex items-center gap-2"><div className="w-2 h-2 rounded-full bg-[#ff9800]"></div> High</span>
-            <span className="font-code-sm font-bold">{activeProject.high}</span>
+            <span className="font-code-sm font-bold">{findingsData.length > 0 ? severityCounts.High : activeProject.high}</span>
           </div>
           <div className="flex items-center justify-between text-xs">
             <span className="flex items-center gap-2"><div className="w-2 h-2 rounded-full bg-[#ffeb3b]"></div> Medium</span>
-            <span className="font-code-sm font-bold text-on-surface-variant">{activeProject.medium}</span>
+            <span className="font-code-sm font-bold text-on-surface-variant">{findingsData.length > 0 ? severityCounts.Medium : activeProject.medium}</span>
           </div>
           <div className="flex items-center justify-between text-xs">
             <span className="flex items-center gap-2"><div className="w-2 h-2 rounded-full bg-[#9e9e9e]"></div> Low</span>
-            <span className="font-code-sm font-bold text-on-surface-variant">{activeProject.low}</span>
+            <span className="font-code-sm font-bold text-on-surface-variant">{findingsData.length > 0 ? severityCounts.Low : activeProject.low}</span>
           </div>
         </GlassPanel>
 
